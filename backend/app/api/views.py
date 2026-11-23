@@ -18,7 +18,7 @@ from app.db.models import (
     TimelineEvent,
 )
 from app.provenance.graph import claim_assumptions
-from app.provenance.text_checks import unverified_numbers
+from app.provenance.text_checks import explanation_part, unverified_numbers
 from app.schemas.api import (
     AssumptionOut,
     ClaimAssumptions,
@@ -42,7 +42,7 @@ def message_out(session: Session, message: ChatMessage) -> MessageOut:
     if message.role == "assistant" and message.run_id is not None:
         claim_texts = session.scalars(select(Claim.text).where(Claim.run_id == message.run_id))
         out.verified = False
-        out.unverified_numbers = unverified_numbers(message.content, claim_texts)
+        out.unverified_numbers = unverified_numbers(explanation_part(message.content), claim_texts)
     return out
 
 

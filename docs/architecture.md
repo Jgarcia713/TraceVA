@@ -45,10 +45,12 @@ datasets/ (gitignored raw files, hash-pinned)
 | `GET /messages/{id}/related` | Chat selection → the run's entity IDs grouped by type, plus event sequence numbers |
 
 Runtime rules:
-- **Background execution:** a `ThreadPoolExecutor` (`MAX_CONCURRENT_RUNS`, default 2). Budgets start when a run begins executing, not while it is queued; a queued run is still shown as `running`.
+- **Background execution:** a `ThreadPoolExecutor` (`MAX_CONCURRENT_RUNS`, default 1, because a local model serves one request at a time). Budgets start when a run begins executing, not while it is queued; a queued run is still shown as `running`. On shutdown, running runs stop at their next step (`INTERRUPTED`).
 - **One running run per conversation:** checked in code, and enforced by a partial unique index so concurrent requests cannot race past the check.
 - **Single process only:** at startup, runs left `running` are marked `failed` with `INTERRUPTED` and a `RUN_FAILED` event. Shutdown waits for in-flight runs and cancels queued ones (the next startup marks those as interrupted).
-- **SQLite WAL mode** plus a 5 s busy timeout on the app engine, so API reads proceed while a run writes.
+- **SQLite WAL mode** plus a 5 s busy timeout on the app engine, so API reads proceed while a run writes. Write transactions use `BEGIN IMMEDIATE` (`app.db.session.write_transaction`), because in WAL a deferred read-then-write transaction fails immediately if another commit lands in between. Read sessions stay deferred.
+- **Concurrent view creation:** if another run commits an identical view between a tool's computation and its write, the existing view is reused (`_resolve_views`) instead of failing on the unique index.
+- **A run is only ever finished once:** completing or failing a run is a no-op if it is no longer `running` (e.g. marked `INTERRUPTED` by a restart), so a late answer never overwrites that status.
 
 ## Data model
 
@@ -89,14 +91,34 @@ IDs are type-prefixed UUIDs (`src_…`, `view_…`). Timestamps are timezone-awa
 
 ## Deliberate boundaries
 
-- **No HTTP endpoint executes tools.** Tools run either directly (tests and scripts, unrecorded) or through the orchestrator (recorded). HTTP endpoints for asking questions arrive in M3.
+- **Tools are never executed directly over HTTP.** They run either directly (tests and scripts, unrecorded) or through the orchestrator (recorded), including when a question is asked via the API.
 - **Follow-up context:** a run sees up to 3 earlier questions with their claims (never explanations); claims must cite current-run evidence (ADR-005).
 - **The provenance graph is computed**, never stored (`app/provenance/graph.py`). Snapshots at sequence N come from timeline events; temporal order is never an edge.
 - **Tool results shown to the model** omit fields a tool never set but keep explicit nulls (e.g. the missing-value group key).
 - **The agent's explanation text is not verified.** Only claims carry citations. See `docs/implementation/m2-agent-vertical-slice.md`.
 - `statistics.py` is pure, so correctness tests use hand-built frames with hand-computed values. Integration tests compare tool output against a stdlib-only reading of the raw fixture (`tests/reference.py`), not pandas against pandas.
-- Only root views are supported; any other view raises `UNSUPPORTED_VIEW` rather than being misapplied.
+- Derived assumptions for a claim are traced through operations of the claim's own run only. A reused view may have been produced elsewhere, from a different base, with different caveats.
 
 ## Measured (local, Iris Xe laptop, full `adult.data`)
 
 - First load including hashing and parsing: about 0.07 s. `summarize` grouped by `sex`: about 0.01 s. Grouped by `fnlwgt` (21,648 groups, truncated to 30): about 0.14 s, with a 5.7 KB JSON payload.
+
+## Status and next steps (updated 2026-11-23)
+
+**Done:** M0–M3 (`main`), plus `create_view`. 178 tests; real-model runs are documented in `docs/implementation/`. The second code review of M3 led to 10 fixes (see `docs/implementation/m3b-http-api.md`).
+
+**In progress:** the interim-presentation prototype:
+- a React frontend
+- a demo replay mode (recorded real model responses, with all computation live)
+- backend chart specs derived from evidence
+- `docs/reports/interim-metrics.md`
+
+**Next milestones:**
+1. **M4, challenge branches:** a user challenge on a claim creates a child run (`parent_run_id`) whose citation scope includes the parent's evidence. Revised claims link to the claims they revise, and a compare endpoint reports changed methods and results. Backend method caveats are natural challenge targets.
+2. **M5, evaluation:** known-answer Adult tasks with reference answers, synthetic pitfall datasets with predefined challenges, a curated external-benchmark subset, and the model comparison (qwen3.5:4b vs. 9b / RTX 4070 / hosted). `scripts/report_runs.py` is the start of the machine-readable output.
+
+**Open items to measure or decide:**
+- Invented IDs are the dominant model failure (12 of 14 failed operations): monitor, then consider short run-scoped aliases (`docs/implementation/create-view.md`).
+- Claim-number checks against evidence; model-derived arithmetic such as differences; rounding-tolerant matching.
+- Per-claim caveat fill rate per model (qwen3.5:4b wrote none).
+- The `httpx` deprecation in Starlette's test client; setup not yet verified on the second laptop.

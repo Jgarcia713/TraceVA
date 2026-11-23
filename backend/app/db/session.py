@@ -17,6 +17,8 @@ failing immediately.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any
 
 from sqlalchemy import Connection, Engine, create_engine, event
@@ -24,6 +26,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import NullPool
 
 BUSY_TIMEOUT_MS = 5000
+IMMEDIATE_OPTION = "traceva_begin_immediate"
 
 
 def _configure_sqlite(engine: Engine, *, foreign_keys: bool, wal: bool = False) -> None:
@@ -41,7 +44,11 @@ def _configure_sqlite(engine: Engine, *, foreign_keys: bool, wal: bool = False) 
 
     @event.listens_for(engine, "begin")
     def _on_begin(conn: Connection) -> None:
-        conn.exec_driver_sql("BEGIN")
+        # Write transactions take the write lock up front (BEGIN IMMEDIATE): in WAL mode a
+        # deferred transaction that reads, then writes after another commit, fails at once
+        # with SQLITE_BUSY_SNAPSHOT, which busy_timeout cannot retry.
+        immediate = conn.get_execution_options().get(IMMEDIATE_OPTION)
+        conn.exec_driver_sql("BEGIN IMMEDIATE" if immediate else "BEGIN")
 
 
 def create_app_engine(database_url: str) -> Engine:
@@ -71,6 +78,18 @@ def assert_no_fk_violations(conn: Connection) -> None:
         raise ForeignKeyViolationError(
             f"{len(rows)} foreign-key violation(s) after migration; first: {rows[:5]}"
         )
+
+
+@contextmanager
+def write_transaction(factory: sessionmaker[Session]) -> Iterator[Session]:
+    """A session in one write transaction started with BEGIN IMMEDIATE.
+
+    Use for every transaction that writes; plain `factory()` sessions stay deferred so
+    reads never take the write lock.
+    """
+    with factory.begin() as session:
+        session.connection(execution_options={IMMEDIATE_OPTION: True})
+        yield session
 
 
 def create_session_factory(engine: Engine) -> sessionmaker[Session]:

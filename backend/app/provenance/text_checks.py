@@ -28,6 +28,14 @@ def numbers_in(text: str) -> set[str]:
     return found
 
 
+CAVEATS_MARKER = "\n\nCaveats:\n"  # how the orchestrator appends answer-level caveats
+
+
+def explanation_part(answer_content: str) -> str:
+    """The free-text explanation of a stored answer, without its appended caveats."""
+    return answer_content.split(CAVEATS_MARKER, 1)[0]
+
+
 def unverified_numbers(explanation: str, claim_texts: Iterable[str]) -> list[str]:
     in_claims: set[str] = set()
     for text in claim_texts:

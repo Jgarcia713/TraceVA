@@ -15,6 +15,7 @@ Persistence rules (brief §6, §8, §11):
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 import time
@@ -52,10 +53,12 @@ from app.db.models import (
     ClaimEvidence,
     Conversation,
     DatasetSource,
+    DatasetView,
     Evidence,
     ModelCall,
     Operation,
 )
+from app.db.session import write_transaction
 from app.provenance.templates import method_caveats
 from app.provenance.timeline import EntityType, EventType, emit
 from app.schemas.agent import SubmitAnswerInput
@@ -168,11 +171,13 @@ class AgentOrchestrator:
         llm: LLMClient,
         settings: Settings,
         clock: Callable[[], float] = time.monotonic,
+        should_stop: Callable[[], bool] = lambda: False,
     ) -> None:
         self._sessions = session_factory
         self._llm = llm
         self._settings = settings
         self._clock = clock
+        self._should_stop = should_stop  # set by the API on shutdown
         # run_id -> (conversation_id, question message id), for timeline events
         self._runs: dict[str, tuple[str, str]] = {}
 
@@ -239,6 +244,14 @@ class AgentOrchestrator:
         known: tuple[int, int] | None = None
 
         for step in range(1, s.max_agent_steps + 1):
+            if self._should_stop():
+                return self._fail(
+                    run_id,
+                    conversation_id,
+                    usage,
+                    started,
+                    _error(RunFailure.INTERRUPTED, "the server is shutting down", {"step": step}),
+                )
             if self._clock() > deadline:
                 return self._fail(
                     run_id, conversation_id, usage, started, self._time_budget_error(last_error)
@@ -430,8 +443,9 @@ class AgentOrchestrator:
             started_at = utcnow()
             outcome = execute(ctx, call.name, call.arguments)
             completed_at = utcnow()
-        with self._sessions.begin() as session:
+        with write_transaction(self._sessions) as session:
             if outcome.ok:
+                outcome = self._resolve_views(session, outcome)
                 persist_views(session, outcome.new_views)  # same transaction as the Operation
             operation = self._operation(
                 session, run_id, model_call_id, call, outcome, started_at, completed_at
@@ -467,6 +481,47 @@ class AgentOrchestrator:
                 )
             return self._model_view(evidence.id, outcome.model_view)
 
+    @staticmethod
+    def _resolve_views(session: Session, outcome: ToolOutcome) -> ToolOutcome:
+        """Reuse a view that another run committed after this tool computed its draft.
+
+        Drafts are computed in a read session; if an identical definition was persisted
+        since, the draft ID is replaced by the existing view's ID everywhere in the
+        outcome, and the view is reported as reused instead of failing on the unique index.
+        """
+        replacements: dict[str, str] = {}
+        remaining = []
+        for draft in outcome.new_views:
+            existing = session.scalar(
+                select(DatasetView.id).where(
+                    DatasetView.source_id == draft.source_id,
+                    DatasetView.definition_sha256 == draft.definition_sha256,
+                )
+            )
+            if existing is None:
+                remaining.append(draft)
+            else:
+                replacements[draft.id] = existing
+        if not replacements:
+            return outcome
+
+        def remap(value: Any) -> Any:
+            text_value = json.dumps(value)
+            for old, new in replacements.items():
+                text_value = text_value.replace(old, new)
+            data = json.loads(text_value)
+            if isinstance(data, dict) and "reused" in data:
+                data["reused"] = True
+            return data
+
+        return dataclasses.replace(
+            outcome,
+            result=remap(outcome.result),
+            model_view=remap(outcome.model_view),
+            output_ids=[replacements.get(i, i) for i in outcome.output_ids],
+            new_views=remaining,
+        )
+
     def _record_rejected_call(
         self,
         run_id: str,
@@ -476,7 +531,7 @@ class AgentOrchestrator:
         error: dict[str, Any],
     ) -> dict[str, Any]:
         outcome = ToolOutcome(args=None, input_ids=[], result=None, error=error)
-        with self._sessions.begin() as session:
+        with write_transaction(self._sessions) as session:
             now = utcnow()
             operation = self._operation(session, run_id, model_call_id, call, outcome, now, now)
             self._emit(session, run_id, EventType.TOOL_FAILED, EntityType.OPERATION, operation.id)
@@ -545,7 +600,14 @@ class AgentOrchestrator:
             return _error(ToolErrorCode.INVALID_ARGUMENTS, summarize_validation_error(exc))
 
         cited = {eid for claim in answer.claims for eid in claim.evidence_ids}
-        with self._sessions.begin() as session:
+        with write_transaction(self._sessions) as session:
+            current = session.get(AnalysisRun, run_id)
+            assert current is not None
+            if current.status != RunStatus.RUNNING:  # e.g. marked INTERRUPTED meanwhile
+                logger.warning("run %s is %s; answer not recorded", run_id, current.status)
+                return RunResult(
+                    run_id, conversation_id, RunStatus(current.status), error=current.error_json
+                )
             run_evidence = set(
                 session.scalars(
                     select(Evidence.id)
@@ -648,7 +710,7 @@ class AgentOrchestrator:
             },
             "datasets": [{"source_id": d["source_id"], "sha256": d["sha256"]} for d in datasets],
         }
-        with self._sessions.begin() as session:
+        with write_transaction(self._sessions) as session:
             if conversation_id is None:
                 conversation = Conversation()
                 session.add(conversation)
@@ -695,7 +757,7 @@ class AgentOrchestrator:
         response: ModelResponse | None,
         error: dict[str, Any] | None,
     ) -> str:
-        with self._sessions.begin() as session:
+        with write_transaction(self._sessions) as session:
             call = ModelCall(
                 run_id=run_id,
                 step_no=step,
@@ -824,9 +886,13 @@ class AgentOrchestrator:
         started: float,
         error: dict[str, Any],
     ) -> RunResult:
-        with self._sessions.begin() as session:
+        with write_transaction(self._sessions) as session:
             run = session.get(AnalysisRun, run_id)
             assert run is not None
+            if run.status != RunStatus.RUNNING:  # already finished elsewhere: never overwrite
+                return RunResult(
+                    run_id, conversation_id, RunStatus(run.status), error=run.error_json
+                )
             run.status = RunStatus.FAILED
             run.error_json = error
             run.completed_at = utcnow()

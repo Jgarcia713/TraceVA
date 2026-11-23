@@ -88,7 +88,9 @@ def scripts() -> Scripts:
 
 @pytest.fixture
 def api(settings: Settings, sample_ids: dict[str, str], scripts: Scripts) -> Iterator[TestClient]:
-    with TestClient(create_app(settings, llm_factory=scripts)) as client:
+    # Two workers: exercises parallel runs (the default of 1 would queue them).
+    parallel = settings.model_copy(update={"max_concurrent_runs": 2})
+    with TestClient(create_app(parallel, llm_factory=scripts)) as client:
         yield client
 
 

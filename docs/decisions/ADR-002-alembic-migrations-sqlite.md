@@ -47,6 +47,7 @@ Use **Alembic from Milestone 0**, with:
 - `dataset_views` has a partial unique index (`source_id WHERE parent_view_id IS NULL`), so each source has exactly one root view, enforced by the database.
 
 - 2026-11-23 (M3b): the app engine also sets `PRAGMA journal_mode=WAL` and `busy_timeout=5000` in the same `connect` listener, so API reads are not blocked by a background run's writes. WAL is persistent per database file; the `-wal` and `-shm` files are gitignored.
+- 2026-11-23 (M3 review): write transactions begin with `BEGIN IMMEDIATE`, selected through a connection execution option (`write_transaction()`), because a deferred read-then-write transaction in WAL fails with `SQLITE_BUSY_SNAPSHOT` when another commit lands first, and the busy handler does not retry that case.
 
 ## Verification
 - `tests/integration/test_migrations.py` (passing):

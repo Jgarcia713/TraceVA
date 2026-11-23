@@ -32,8 +32,10 @@ def health(request: Request) -> HealthResponse:
 
     head = _schema_head()
     up_to_date = database_ok and revision == head
+    startup_errors = list(getattr(request.app.state, "startup_errors", []))
     return HealthResponse(
-        status="ok" if up_to_date else "degraded",
+        status="ok" if up_to_date and not startup_errors else "degraded",
+        startup_errors=startup_errors,
         database="ok" if database_ok else "error",
         schema_revision=revision,
         schema_head=head,

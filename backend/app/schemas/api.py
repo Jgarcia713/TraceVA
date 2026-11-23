@@ -25,6 +25,7 @@ class HealthResponse(BaseModel):
     schema_revision: str | None
     schema_head: str | None
     schema_up_to_date: bool
+    startup_errors: list[str] = []
 
 
 class DatasetColumn(BaseModel):

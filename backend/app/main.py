@@ -6,10 +6,12 @@ Run locally (from backend/, after `alembic upgrade head`), single process only:
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from sqlalchemy.exc import OperationalError
 
 from app.agent.model_client import LLMClient, OpenAICompatClient
 from app.agent.runner import RunManager, reconcile_interrupted_runs
@@ -19,6 +21,7 @@ from app.config import Settings, get_settings
 from app.db.session import create_app_engine, create_session_factory
 
 API_PREFIX = "/api/v1"
+logger = logging.getLogger(__name__)
 
 
 def create_app(
@@ -38,8 +41,13 @@ def create_app(
         # The runs table only exists once migrations have been applied.
         try:
             reconcile_interrupted_runs(session_factory)
-        except Exception:  # unmigrated database: /health reports it as degraded
-            app.state.reconcile_error = True
+        except OperationalError as exc:
+            if "no such table" not in str(exc):  # unmigrated DB is reported by /health
+                logger.exception("startup reconciliation failed")
+                app.state.startup_errors.append(f"reconcile: {exc}")
+        except Exception as exc:
+            logger.exception("startup reconciliation failed")
+            app.state.startup_errors.append(f"reconcile: {exc}")
         manager = RunManager(session_factory, resolved, make_llm)
         app.state.run_manager = manager
         try:
@@ -53,6 +61,7 @@ def create_app(
     app.state.engine = engine
     app.state.session_factory = session_factory
     app.state.api_prefix = API_PREFIX
+    app.state.startup_errors = []
 
     install_error_handling(app)
     for module in (health, datasets, conversations, runs):

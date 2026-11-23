@@ -45,7 +45,9 @@ class Settings(BaseSettings):
     max_tool_calls_per_step: int = Field(default=4, ge=1, le=10)
     max_tool_result_chars: int = Field(default=6000, ge=500, le=50_000)
     # Background runs executed in parallel by the API (others wait, shown as 'running').
-    max_concurrent_runs: int = Field(default=2, ge=1, le=8)
+    # 1 by default: a local model serves one request at a time, so parallel runs would
+    # only spend their time budgets waiting on each other.
+    max_concurrent_runs: int = Field(default=1, ge=1, le=8)
 
     @field_validator("database_url")
     @classmethod

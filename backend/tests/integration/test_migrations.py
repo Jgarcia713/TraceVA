@@ -124,3 +124,29 @@ def test_table_rebuild_preserves_child_rows(alembic_config: Config, database_url
     finally:
         engine.dispose()
     command.upgrade(alembic_config, "head")
+
+
+def test_write_transactions_take_the_lock_up_front(migrated_db: str) -> None:
+    """BEGIN IMMEDIATE: a write transaction holds the write lock before its first write,
+    so a read-then-write pattern cannot fail with SQLITE_BUSY_SNAPSHOT under WAL."""
+    import sqlite3
+
+    from app.db.session import create_session_factory, write_transaction
+
+    engine = create_app_engine(migrated_db)
+    try:
+        factory = create_session_factory(engine)
+        probe = sqlite3.connect(
+            migrated_db.removeprefix("sqlite:///"), timeout=0, isolation_level=None
+        )
+        with write_transaction(factory) as session:
+            session.execute(text("SELECT 1"))  # read only, so far
+            with pytest.raises(sqlite3.OperationalError, match="locked"):
+                probe.execute("BEGIN IMMEDIATE")
+        with factory() as reader:  # plain sessions stay deferred and do not lock
+            reader.execute(text("SELECT 1"))
+            probe.execute("BEGIN IMMEDIATE")
+            probe.execute("ROLLBACK")
+        probe.close()
+    finally:
+        engine.dispose()

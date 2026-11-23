@@ -25,6 +25,7 @@ from app.db.models import (
     Operation,
     TimelineEvent,
 )
+from app.db.session import write_transaction
 from app.provenance.graph import claim_assumptions, run_graph
 
 Messages = Sequence[dict[str, Any]]
@@ -335,3 +336,134 @@ def test_follow_up_sees_questions_and_claims_not_explanations(
     assert any("did not finish" in c and "BUDGET_EXHAUSTED" in c for c in contents)
     # The stable prefix stays first (prompt cache).
     assert [m["role"] for m in sent[:2]] == ["system", "system"]
+
+
+# --- review regressions (M3 code review) -------------------------------------------------
+
+
+def test_snapshot_shows_run_status_as_of_that_moment(
+    session_factory: sessionmaker[Session], completed: RunResult
+) -> None:
+    with session_factory() as db:
+        early = run_graph(db, completed.run_id, at_sequence=2)
+        final = run_graph(db, completed.run_id)
+
+    def status(graph: Any) -> str:
+        return next(n.data["status"] for n in graph.nodes if n.type == "run")
+
+    assert status(early) == "running" and status(final) == "completed"
+
+
+def test_caveat_on_claim_and_answer_listed_once(
+    session_factory: sessionmaker[Session], settings: Settings, sample_ids: dict[str, str]
+) -> None:
+    def answer(messages: Messages) -> ModelResponse:
+        ev = payloads(messages)[-1]["evidence_id"]
+        return calls(
+            tool_call(
+                "submit_answer",
+                {
+                    "explanation": "x",
+                    "claims": [{"text": "t", "evidence_ids": [ev], "caveats": ["Same caveat."]}],
+                    "caveats": ["Same caveat."],
+                },
+            )
+        )
+
+    result, _ = run_agent(
+        session_factory,
+        settings,
+        [
+            calls(
+                tool_call(
+                    "summarize",
+                    {"view_id": sample_ids["view_id"], "columns": ["age"], "metrics": ["median"]},
+                )
+            ),
+            answer,
+        ],
+    )
+    with session_factory() as db:
+        stated = claim_assumptions(db, result.claim_ids[0])["stated"]
+    assert [(a["text"], a["scope"]) for a in stated] == [("Same caveat.", "claim")]
+
+
+def test_derived_assumptions_stay_within_the_claims_run(
+    session_factory: sessionmaker[Session],
+    settings: Settings,
+    completed: RunResult,
+    sample_ids: dict[str, str],
+) -> None:
+    # The second run reuses the same view (same definition) as the first.
+    second, _ = run_agent(session_factory, settings, filtered_run_script(sample_ids["view_id"]))
+    with session_factory() as db:
+        own_ops = set(db.scalars(select(Operation.id).where(Operation.run_id == second.run_id)))
+        derived = claim_assumptions(db, second.claim_ids[0])["derived"]
+    assert derived and all(set(a["operations"]) <= own_ops for a in derived)
+
+
+def test_late_answer_does_not_overwrite_interrupted_run(
+    session_factory: sessionmaker[Session], settings: Settings, sample_ids: dict[str, str]
+) -> None:
+    from app.agent.runner import reconcile_interrupted_runs
+
+    def interrupted_then_answer(messages: Messages) -> ModelResponse:
+        reconcile_interrupted_runs(session_factory)  # e.g. the server restarted meanwhile
+        return calls(tool_call("submit_answer", {"explanation": "late"}))
+
+    result, _ = run_agent(session_factory, settings, [interrupted_then_answer])
+    with session_factory() as db:
+        run = db.get(AnalysisRun, result.run_id)
+        types = db.scalars(
+            select(TimelineEvent.event_type).where(TimelineEvent.run_id == result.run_id)
+        ).all()
+    assert run is not None and run.status == "failed"
+    assert run.error_json is not None and run.error_json["code"] == "INTERRUPTED"
+    assert "RUN_COMPLETED" not in types and types.count("RUN_FAILED") == 1
+
+
+def test_concurrently_created_view_is_reused_not_failed(
+    session_factory: sessionmaker[Session], settings: Settings, sample_ids: dict[str, str]
+) -> None:
+    """Another run commits the identical view between this tool's read and its write."""
+    from app.agent import tool_registry
+    from app.analysis import tools as tools_module
+
+    original = tools_module.create_view
+
+    def racing_create_view(ctx: Any, args: Any) -> Any:
+        result = original(ctx, args)
+        with write_transaction(session_factory) as other:  # the other run wins the race
+            tools_module.persist_views(
+                other,
+                [
+                    type(d)(**{**d.__dict__, "id": "view_committed_by_other_run"})
+                    for d in result.new_views
+                ],
+            )
+        return result
+
+    spec = tool_registry.TOOLS["create_view"]
+    tool_registry.TOOLS["create_view"] = tool_registry.ToolSpec(
+        spec.name, spec.description, spec.input_model, racing_create_view, spec.input_ids
+    )
+    try:
+        result, llm = run_agent(
+            session_factory, settings, filtered_run_script(sample_ids["view_id"])
+        )
+    finally:
+        tool_registry.TOOLS["create_view"] = spec
+    assert result.status == RunStatus.COMPLETED
+    view_payload = payloads(llm.requests[1])[0]["result"]
+    assert view_payload["view_id"] == "view_committed_by_other_run" and view_payload["reused"]
+    with session_factory() as db:
+        op = db.scalars(
+            select(Operation).where(
+                Operation.run_id == result.run_id, Operation.tool_name == "create_view"
+            )
+        ).one()
+        events = db.scalars(
+            select(TimelineEvent.event_type).where(TimelineEvent.run_id == result.run_id)
+        ).all()
+    assert op.output_ids_json == ["view_committed_by_other_run"]
+    assert "VIEW_CREATED" not in events  # this run did not create it

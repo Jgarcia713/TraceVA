@@ -91,7 +91,19 @@ def run_graph(session: Session, run_id: str, at_sequence: int | None = None) -> 
     def add(node: Node) -> None:
         nodes.setdefault(node.id, node)
 
-    add(Node(run.id, "run", f"run ({run.status})", data={"status": run.status}))
+    status = run.status
+    if at_sequence is not None:  # status as of the snapshot, not the current one
+        terminal = session.scalar(
+            select(TimelineEvent.event_type).where(
+                TimelineEvent.run_id == run_id,
+                TimelineEvent.event_type.in_(["RUN_COMPLETED", "RUN_FAILED"]),
+                TimelineEvent.sequence_no <= at_sequence,
+            )
+        )
+        status = {"RUN_COMPLETED": "completed", "RUN_FAILED": "failed"}.get(
+            terminal or "", "running"
+        )
+    add(Node(run.id, "run", f"run ({status})", data={"status": status}))
 
     messages = session.scalars(select(ChatMessage).where(ChatMessage.run_id == run_id)).all()
     question = next((m for m in messages if m.role == "user"), None)
@@ -258,7 +270,11 @@ def claim_assumptions(session: Session, claim_id: str) -> dict[str, list[dict[st
     ):
         entry = describe([assumption])[0]
         entry["scope"] = "claim" if link.claim_id == claim_id else "answer"
-        stated.append(entry)
+        previous = next((e for e in stated if e["id"] == entry["id"]), None)
+        if previous is None:
+            stated.append(entry)
+        elif entry["scope"] == "claim":  # stated on both: the claim-level link wins
+            previous["scope"] = "claim"
 
     # Upstream traversal: claim -> evidence -> operation -> consumed views -> producers.
     op_ids = set(
@@ -285,9 +301,12 @@ def claim_assumptions(session: Session, claim_id: str) -> dict[str, list[dict[st
                     text(
                         "SELECT operations.id FROM operations, "
                         "json_each(operations.output_ids_json) "
-                        "WHERE json_each.value = :view_id AND operations.status = 'succeeded'"
+                        "WHERE json_each.value = :view_id AND operations.status = 'succeeded' "
+                        "AND operations.run_id = :run_id"
                     ),
-                    {"view_id": view_id},
+                    # Same run only: a reused view may have been produced elsewhere, from a
+                    # different base, with different caveats; those are not this claim's.
+                    {"view_id": view_id, "run_id": claim.run_id},
                 ).scalars()
             )
         frontier = producers - seen_ops

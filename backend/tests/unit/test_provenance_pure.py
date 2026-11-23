@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from app.provenance.templates import method_caveats
-from app.provenance.text_checks import numbers_in, unverified_numbers
+from app.provenance.text_checks import explanation_part, numbers_in, unverified_numbers
 
 
 def test_numbers_are_normalized() -> None:
@@ -52,3 +52,9 @@ def test_create_view_templates() -> None:
     assert [k for k, _ in caveats] == ["missing_excluded", "small_view"]
     assert "9 rows with missing 'workclass'" in caveats[0][1]
     assert method_caveats("inspect_dataset", {}, {}) == []
+
+
+def test_check_ignores_appended_caveats() -> None:
+    stored = "Men work more.\n\nCaveats:\n- Groups under 30 rows are unstable."
+    assert explanation_part(stored) == "Men work more."
+    assert unverified_numbers(explanation_part(stored), []) == []

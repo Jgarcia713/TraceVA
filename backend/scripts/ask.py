@@ -19,7 +19,7 @@ from app.config import get_settings
 from app.db.models import AnalysisRun, ChatMessage, Claim, ClaimEvidence, Evidence, Operation
 from app.db.session import create_app_engine, create_session_factory
 from app.provenance.graph import claim_assumptions
-from app.provenance.text_checks import unverified_numbers
+from app.provenance.text_checks import explanation_part, unverified_numbers
 
 
 def short(value: object, limit: int = 160) -> str:
@@ -67,7 +67,7 @@ def main() -> int:
         ).all()
         if answer:
             print(f"\nanswer (explanation NOT verified):\n{answer.content}")
-            loose = unverified_numbers(answer.content, [c.text for c in claims])
+            loose = unverified_numbers(explanation_part(answer.content), [c.text for c in claims])
             if loose:
                 print(f"  numbers in the explanation that appear in no claim: {loose}")
         for claim in claims:

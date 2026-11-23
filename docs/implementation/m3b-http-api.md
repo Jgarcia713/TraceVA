@@ -41,3 +41,21 @@ REST endpoints for conversations, questions, runs, the provenance graph, evidenc
 - A queued run shows `running` (no separate `queued` status).
 - Shutdown waits for in-flight runs, so a real model call delays Ctrl-C until it finishes.
 - Starlette's `httpx` deprecation warning in the test client remains (ADR-003).
+
+## Code review fixes (2026-11-23)
+A second independent review of M3 found 10 issues, mostly caused by parallel background runs. All were fixed with regression tests (178 tests passing); the two most important fixes were mutation-checked.
+
+| Issue | Fix |
+|---|---|
+| Two runs creating the same view at once: the second failed on the unique index | `_resolve_views` reuses the committed view inside the write transaction |
+| WAL read-then-write transactions could fail immediately (`SQLITE_BUSY_SNAPSHOT`) | `write_transaction()` uses `BEGIN IMMEDIATE`; reads stay deferred |
+| A crash while recording a failure left a run `running`, blocking its conversation | The run manager's done-callback logs it and marks the run failed |
+| A startup reconcile could be overwritten by a late answer from a CLI run | Completing or failing a run is a no-op unless it is still `running` |
+| Derived assumptions leaked across runs and conversations through reused views | Lineage traversal is restricted to the claim's own run |
+| The number check also scanned the appended answer caveats | `explanation_part()` checks the explanation only |
+| Startup reconciliation errors were swallowed | Only "no such table" is tolerated; other errors are logged and reported by `/health` (`startup_errors`) |
+| A caveat on both a claim and the answer was listed twice | Merged by assumption ID, preferring claim scope |
+| Shutdown could hang until a run finished | A stop flag is checked between steps (`INTERRUPTED`); a model call in progress still completes |
+| A graph snapshot showed the run's final status | The status is derived from timeline events at or before `at_sequence` |
+
+The default `MAX_CONCURRENT_RUNS` changed from 2 to 1, because a local model serves one request at a time. The HTTP tests use 2 workers so that the parallel path stays covered.
