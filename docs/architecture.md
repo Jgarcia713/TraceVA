@@ -40,6 +40,7 @@ IDs are type-prefixed UUIDs (`src_…`, `view_…`). Timestamps are timezone-awa
   - Missing group keys form an explicit `null` group.
   - `std` is the sample standard deviation (ddof=1), `null` when n < 2.
   - Every metric must apply to every column (strict). Mixed numeric and categorical requests are separate calls, and therefore separate future operations.
+  - A column in both `columns` and `group_by` is **rejected, not silently corrected** (decided 2026-11-22). Normalizing model arguments would make the recorded operation differ from what the model actually requested. Prevention is handled in the field descriptions, which the model sees as JSON Schema. In a pre-M2 test with qwen3.5:4b, the model made this mistake before the descriptions were improved and repaired it in one round after receiving the error; with the improved descriptions it called correctly on the first try (one question, temperature 0).
   - Groups are ordered by size descending, then key. Truncation at `MAX_TOOL_RESULT_ROWS` keeps the largest groups and reports `total_groups` and `truncated`. Categories beyond the cap are reported as `other_count`.
   - An empty view returns an explicit empty result with a warning rather than an error.
 

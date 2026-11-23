@@ -55,6 +55,20 @@ Raw files must be placed under `../datasets/` first (see `../datasets/README.md`
 ```python
 from app.analysis.tools import ToolContext, summarize
 from app.schemas.tools import SummarizeInput
-out = summarize(ctx, SummarizeInput(view_id=..., columns=["hours_per_week"],
-                                    group_by=["sex"], metrics=["mean", "median"]))
+
+out = summarize(
+    ctx,
+    SummarizeInput(
+        view_id=..., columns=["hours_per_week"], group_by=["sex"], metrics=["mean", "median"]
+    ),
+)
 ```
+
+## Local model smoke test (requires Ollama)
+
+```powershell
+ollama pull qwen3.5:4b-q4_K_M
+python scripts/model_smoke.py --model qwen3.5:4b-q4_K_M --mode openai
+```
+
+Reports tool-call validity, reasoning leakage, and latency. See `../docs/implementation/pre-m2-model-smoke-test.md` for results and limitations.

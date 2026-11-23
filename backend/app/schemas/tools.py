@@ -110,8 +110,19 @@ CATEGORICAL_METRICS = frozenset({Metric.PROPORTIONS})
 
 class SummarizeInput(StrictInput):
     view_id: str = Field(description="ID of a dataset view (view_...).")
-    columns: list[ColumnName] = Field(min_length=1, max_length=20)
-    group_by: list[ColumnName] = Field(default_factory=list, max_length=2)
+    columns: list[ColumnName] = Field(
+        min_length=1,
+        max_length=20,
+        description="Columns to compute statistics for. Do not include group_by columns here.",
+    )
+    group_by: list[ColumnName] = Field(
+        default_factory=list,
+        max_length=2,
+        description=(
+            "Optional columns to group rows by (at most 2). Each group is reported "
+            "separately; group_by columns must not also appear in columns."
+        ),
+    )
     metrics: list[Metric] = Field(
         min_length=1,
         description=(
