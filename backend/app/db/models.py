@@ -9,7 +9,17 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, ForeignKey, Index, Integer, String, Text, UniqueConstraint, text
+from sqlalchemy import (
+    JSON,
+    CheckConstraint,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, UTCDateTime, new_id, utcnow
@@ -196,3 +206,61 @@ class ClaimEvidence(Base):
     claim_id: Mapped[str] = mapped_column(ForeignKey("claims.id"), primary_key=True)
     evidence_id: Mapped[str] = mapped_column(ForeignKey("evidence.id"), primary_key=True)
     origin: Mapped[str] = mapped_column(String(30))  # agent_proposed
+
+
+# ---------------------------------------------------------------------------
+# Milestone 3: assumptions and timeline
+# ---------------------------------------------------------------------------
+
+
+class Assumption(Base):
+    """A stated assumption or caveat. Never marked as checked unless it actually was
+    (brief invariant 7); every current source yields status 'not_tested'."""
+
+    __tablename__ = "assumptions"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True, default=lambda: new_id("asm"))
+    run_id: Mapped[str] = mapped_column(ForeignKey("analysis_runs.id"), index=True)
+    text: Mapped[str] = mapped_column(Text)
+    source: Mapped[str] = mapped_column(String(30))  # agent_stated | method_template
+    template_key: Mapped[str | None] = mapped_column(String(60))  # method_template only
+    status: Mapped[str] = mapped_column(String(20))  # not_tested
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+
+
+class AssumptionLink(Base):
+    """QUALIFIES relation: an assumption qualifies exactly one claim, operation, or answer
+    message. Typed foreign keys + CHECK make endpoint validity a database guarantee."""
+
+    __tablename__ = "assumption_links"
+    __table_args__ = (
+        CheckConstraint(
+            "(claim_id IS NOT NULL) + (operation_id IS NOT NULL) + (message_id IS NOT NULL) = 1",
+            name="exactly_one_target",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True, default=lambda: new_id("asl"))
+    assumption_id: Mapped[str] = mapped_column(ForeignKey("assumptions.id"), index=True)
+    claim_id: Mapped[str | None] = mapped_column(ForeignKey("claims.id"), index=True)
+    operation_id: Mapped[str | None] = mapped_column(ForeignKey("operations.id"), index=True)
+    message_id: Mapped[str | None] = mapped_column(ForeignKey("chat_messages.id"), index=True)
+
+
+class TimelineEvent(Base):
+    """Ordered record of what happened, for UI synchronization and replay. Written in the
+    same transaction as the entity it describes. Temporal order is not dependency: the
+    provenance graph holds dependencies (brief invariant 4)."""
+
+    __tablename__ = "timeline_events"
+    __table_args__ = (UniqueConstraint("conversation_id", "sequence_no"),)
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True, default=lambda: new_id("evt"))
+    conversation_id: Mapped[str] = mapped_column(ForeignKey("conversations.id"), index=True)
+    run_id: Mapped[str | None] = mapped_column(ForeignKey("analysis_runs.id"), index=True)
+    message_id: Mapped[str | None] = mapped_column(ForeignKey("chat_messages.id"))
+    event_type: Mapped[str] = mapped_column(String(40))
+    entity_type: Mapped[str | None] = mapped_column(String(30))
+    entity_id: Mapped[str | None] = mapped_column(String(40), index=True)
+    sequence_no: Mapped[int] = mapped_column(Integer)
+    occurred_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)

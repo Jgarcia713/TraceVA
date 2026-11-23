@@ -2,7 +2,7 @@
 
 The design target is `docs/TRACEVA_BACKEND_CONTEXT.md`. This document describes what currently exists; decisions and their rationale are in `docs/decisions/`.
 
-**Status:** Milestones 0–2 complete (2026-11-22), plus `create_view` (2026-11-23). The agent runs from the CLI only. Timeline events, assumptions, the provenance graph API, HTTP endpoints for asking questions, and challenge branches are not built yet.
+**Status:** Milestones 0–2 complete, plus `create_view` and M3a (provenance data layer: timeline, assumptions, computed graph) as of 2026-11-23. HTTP endpoints for runs and graphs are M3b. The agent runs from the CLI only. Timeline events, assumptions, the provenance graph API, HTTP endpoints for asking questions, and challenge branches are not built yet.
 
 ## Components
 
@@ -19,6 +19,8 @@ FastAPI (app/main.py)  /api/v1/health, /api/v1/datasets[/{id}]   read-only
    │     statistics.py     pure dataframe functions (no DB/files): profile, summarize
    │     registry.py       code-defined datasets + registration (source + root view)
    │     datasets.py       parser adult-v1, SHA-256 checks, path safety, frame cache
+   ├── app/provenance/     timeline.py (events), templates.py (method caveats),
+   │                       graph.py (computed graph, claim assumptions), text_checks.py
    ├── app/schemas/        Pydantic contracts: tools.py (LLM-facing tool inputs), agent.py, api.py
    └── app/db/             models, UTC datetime type, engines (FK + transaction handling)
 SQLite (Alembic-managed) ← datasets, conversations, runs, model calls, operations, evidence, claims
@@ -37,6 +39,8 @@ datasets/ (gitignored raw files, hash-pinned)
 | `operations` | Each tool call, including failed ones and rejected `submit_answer` attempts | Written once; raw arguments as sent, validated args or null, consumed IDs (`input_ids_json`), produced or resolved IDs such as views (`output_ids_json`), error |
 | `evidence` | Result of a successful operation | One per successful operation; immutable |
 | `claims`, `claim_evidence` | Model claims and their citations | Citations `agent_proposed`; must reference evidence from the same run (checked on the server) |
+| `assumptions`, `assumption_links` | Stated caveats (`agent_stated`) and backend method caveats (`method_template`) | Always `not_tested`. A link qualifies exactly one claim, operation, or answer message (typed FKs + CHECK). Answer-level caveats link to the answer, never to each claim |
+| `timeline_events` | Ordered event log per conversation | Emitted in the same transaction as the entity; `sequence_no` unique per conversation; `message_id` = triggering chat message |
 
 IDs are type-prefixed UUIDs (`src_…`, `view_…`). Timestamps are timezone-aware UTC (`UTCDateTime` rejects naive values). There are no cascade deletes.
 
@@ -63,7 +67,8 @@ IDs are type-prefixed UUIDs (`src_…`, `view_…`). Timestamps are timezone-awa
 ## Deliberate boundaries
 
 - **No HTTP endpoint executes tools.** Tools run either directly (tests and scripts, unrecorded) or through the orchestrator (recorded). HTTP endpoints for asking questions arrive in M3.
-- **Runs are independent of earlier turns.** Conversations group runs, but a run's model context holds only its own question (M3 design item).
+- **Follow-up context:** a run sees up to 3 earlier questions with their claims (never explanations); claims must cite current-run evidence (ADR-005).
+- **The provenance graph is computed**, never stored (`app/provenance/graph.py`). Snapshots at sequence N come from timeline events; temporal order is never an edge.
 - **Tool results shown to the model** omit fields a tool never set but keep explicit nulls (e.g. the missing-value group key).
 - **The agent's explanation text is not verified.** Only claims carry citations. See `docs/implementation/m2-agent-vertical-slice.md`.
 - `statistics.py` is pure, so correctness tests use hand-built frames with hand-computed values. Integration tests compare tool output against a stdlib-only reading of the raw fixture (`tests/reference.py`), not pandas against pandas.

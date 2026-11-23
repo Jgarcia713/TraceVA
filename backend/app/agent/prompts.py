@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-PROMPT_VERSION = "m2-v2"
+PROMPT_VERSION = "m3-v1"
 
 SYSTEM_PROMPT = """\
 You are a data-analysis agent working on registered tabular datasets.
@@ -20,7 +20,10 @@ Rules:
 - Finish by calling submit_answer exactly once. Every claim must cite the evidence_id
   values that support it. Only cite evidence_ids returned in this conversation.
 - Describe associations, not causes. State relevant limitations as caveats, such as
-  missing values or small groups.
+  missing values or small groups: on a claim if they concern that claim, otherwise on
+  the answer.
+- Earlier turns of the conversation may be shown as questions and claims. Their
+  evidence cannot be cited now; call the tools again if you need those numbers.
 - If a tool returns an error, read it, correct the arguments, and try again.
 - To restrict rows (for example age > 40, or only women), call create_view first and
   pass the returned view_id to summarize. Never approximate a filter with group_by.
@@ -51,9 +54,29 @@ def dataset_context(datasets: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
-def initial_messages(datasets: list[dict[str, Any]], question: str) -> list[dict[str, Any]]:
+def history_messages(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Earlier turns: the question and its claims only (explanations are unverified)."""
+    messages: list[dict[str, Any]] = []
+    for turn in history:
+        messages.append({"role": "user", "content": turn["question"]})
+        if turn["status"] == "completed":
+            claims = "\n".join(f"- {c}" for c in turn["claims"]) or "- (no claims)"
+            body = f"Earlier answer, claims only:\n{claims}"
+        else:
+            body = f"(The earlier run did not finish: {turn.get('error_code') or turn['status']}.)"
+        messages.append({"role": "assistant", "content": body})
+    return messages
+
+
+def initial_messages(
+    datasets: list[dict[str, Any]],
+    question: str,
+    history: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    # Stable prefix first (prompt cache), then earlier turns, then the new question.
     return [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "system", "content": dataset_context(datasets)},
+        *history_messages(history or []),
         {"role": "user", "content": question},
     ]

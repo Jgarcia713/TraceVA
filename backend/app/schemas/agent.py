@@ -18,6 +18,11 @@ class ClaimDraft(StrictInput):
         max_length=10,
         description="evidence_id values (ev_...) returned by tool calls in this run.",
     )
+    caveats: list[str] = Field(
+        default_factory=list,
+        max_length=5,
+        description="Optional limitations that apply to this claim specifically.",
+    )
 
 
 class SubmitAnswerInput(StrictInput):
@@ -37,5 +42,8 @@ class SubmitAnswerInput(StrictInput):
     caveats: list[str] = Field(
         default_factory=list,
         max_length=10,
-        description="Limitations: missing data, association is not causation, scope, etc.",
+        description=(
+            "Limitations of the answer as a whole: missing data, association is not "
+            "causation, scope, etc. Put claim-specific limitations on the claim instead."
+        ),
     )

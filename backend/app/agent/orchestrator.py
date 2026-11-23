@@ -6,10 +6,11 @@ Persistence rules (brief §6, §8, §11):
 - Claims may cite only evidence produced by successful operations of the same run.
 - Database transactions are short and never span a model call or a tool computation:
   tools run in a read session that is closed before the write transaction opens.
-- Conversations group runs, but each run's model context contains only its own
-  question. Carrying earlier turns into the context is an M3 design decision.
 - Every exit path leaves the run `completed` or `failed` with a typed error, and the
   partial record is kept.
+- Every persisted entity gets a timeline event in the same transaction (M3).
+- Follow-up questions see earlier questions and their claims, not the unverified
+  explanations; claims must still cite evidence from the current run (ADR-005).
 """
 
 from __future__ import annotations
@@ -43,6 +44,8 @@ from app.config import Settings
 from app.db.base import utcnow
 from app.db.models import (
     AnalysisRun,
+    Assumption,
+    AssumptionLink,
     ChatMessage,
     Claim,
     ClaimEvidence,
@@ -52,6 +55,8 @@ from app.db.models import (
     ModelCall,
     Operation,
 )
+from app.provenance.templates import method_caveats
+from app.provenance.timeline import EntityType, EventType, emit
 from app.schemas.agent import SubmitAnswerInput
 from app.schemas.tools import ToolErrorCode
 
@@ -142,6 +147,8 @@ class AgentOrchestrator:
         self._llm = llm
         self._settings = settings
         self._clock = clock
+        # run_id -> (conversation_id, question message id), for timeline events
+        self._runs: dict[str, tuple[str, str]] = {}
 
     # ------------------------------------------------------------------ public
 
@@ -182,7 +189,7 @@ class AgentOrchestrator:
                 started,
                 _error(RunFailure.NO_DATASETS, "no datasets are registered"),
             )
-        messages = initial_messages(datasets, question)
+        messages = initial_messages(datasets, question, self._history(conversation_id, run_id))
         tools = model_tool_schemas()
         deadline = started + s.max_run_seconds
         nudged = False
@@ -391,11 +398,32 @@ class AgentOrchestrator:
             usage.operations += 1
             if not outcome.ok:
                 usage.failed_operations += 1
+                self._emit(
+                    session, run_id, EventType.TOOL_FAILED, EntityType.OPERATION, operation.id
+                )
                 return {"error": outcome.error}
             assert outcome.result is not None and outcome.model_view is not None
+            self._emit(
+                session, run_id, EventType.TOOL_SUCCEEDED, EntityType.OPERATION, operation.id
+            )
+            for draft in outcome.new_views:
+                self._emit(session, run_id, EventType.VIEW_CREATED, EntityType.VIEW, draft.id)
             evidence = Evidence(operation_id=operation.id, result_json=outcome.result)
             session.add(evidence)
             session.flush()
+            self._emit(
+                session, run_id, EventType.EVIDENCE_CREATED, EntityType.EVIDENCE, evidence.id
+            )
+            assert outcome.args is not None
+            for key, caveat in method_caveats(call.name, outcome.args, outcome.result):
+                self._record_assumption(
+                    session,
+                    run_id,
+                    caveat,
+                    "method_template",
+                    template_key=key,
+                    operation_id=operation.id,
+                )
             return self._model_view(evidence.id, outcome.model_view)
 
     def _record_rejected_call(
@@ -409,7 +437,8 @@ class AgentOrchestrator:
         outcome = ToolOutcome(args=None, input_ids=[], result=None, error=error)
         with self._sessions.begin() as session:
             now = utcnow()
-            self._operation(session, run_id, model_call_id, call, outcome, now, now)
+            operation = self._operation(session, run_id, model_call_id, call, outcome, now, now)
+            self._emit(session, run_id, EventType.TOOL_FAILED, EntityType.OPERATION, operation.id)
         usage.operations += 1
         usage.failed_operations += 1
         return error
@@ -503,19 +532,32 @@ class AgentOrchestrator:
                             claim_id=claim.id, evidence_id=evidence_id, origin="agent_proposed"
                         )
                     )
+                session.flush()
+                self._emit(session, run_id, EventType.CLAIM_CREATED, EntityType.CLAIM, claim.id)
+                for caveat in dict.fromkeys(draft.caveats):
+                    self._record_assumption(
+                        session, run_id, caveat, "agent_stated", claim_id=claim.id
+                    )
 
             content = answer.explanation
             if answer.caveats:
                 content += "\n\nCaveats:\n" + "\n".join(f"- {c}" for c in answer.caveats)
-            session.add(
-                ChatMessage(
-                    conversation_id=conversation_id,
-                    run_id=run_id,
-                    role="assistant",
-                    content=content,
-                    sequence_no=self._next_message_seq(session, conversation_id),
-                )
+            message = ChatMessage(
+                conversation_id=conversation_id,
+                run_id=run_id,
+                role="assistant",
+                content=content,
+                sequence_no=self._next_message_seq(session, conversation_id),
             )
+            session.add(message)
+            session.flush()
+            self._emit(session, run_id, EventType.ASSISTANT_MESSAGE, EntityType.MESSAGE, message.id)
+            # Answer-level caveats qualify the answer as a whole, never each claim.
+            for caveat in dict.fromkeys(answer.caveats):
+                self._record_assumption(
+                    session, run_id, caveat, "agent_stated", message_id=message.id
+                )
+            self._emit(session, run_id, EventType.RUN_COMPLETED, EntityType.RUN, run_id)
             run = session.get(AnalysisRun, run_id)
             assert run is not None
             run.status = RunStatus.COMPLETED
@@ -578,15 +620,20 @@ class AgentOrchestrator:
             )
             session.add(run)
             session.flush()
-            session.add(
-                ChatMessage(
-                    conversation_id=conversation_id,
-                    run_id=run.id,
-                    role="user",
-                    content=question,
-                    sequence_no=self._next_message_seq(session, conversation_id),
-                )
+            question_message = ChatMessage(
+                conversation_id=conversation_id,
+                run_id=run.id,
+                role="user",
+                content=question,
+                sequence_no=self._next_message_seq(session, conversation_id),
             )
+            session.add(question_message)
+            session.flush()
+            self._runs[run.id] = (conversation_id, question_message.id)
+            self._emit(
+                session, run.id, EventType.USER_MESSAGE, EntityType.MESSAGE, question_message.id
+            )
+            self._emit(session, run.id, EventType.RUN_STARTED, EntityType.RUN, run.id)
             return run.id, conversation_id
 
     def _record_model_call(
@@ -619,6 +666,101 @@ class AgentOrchestrator:
             session.flush()
             return call.id
 
+    def _emit(
+        self,
+        session: Session,
+        run_id: str,
+        event_type: EventType,
+        entity_type: EntityType,
+        entity_id: str,
+    ) -> None:
+        conversation_id, question_message_id = self._runs[run_id]
+        emit(
+            session,
+            conversation_id=conversation_id,
+            event_type=event_type,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            run_id=run_id,
+            message_id=question_message_id,
+        )
+
+    def _record_assumption(
+        self,
+        session: Session,
+        run_id: str,
+        text: str,
+        source: str,
+        *,
+        template_key: str | None = None,
+        claim_id: str | None = None,
+        operation_id: str | None = None,
+        message_id: str | None = None,
+    ) -> None:
+        """Store an assumption (agent-stated text is deduplicated per run) and link it to
+        exactly one target. Status is always 'not_tested': nothing here checks it."""
+        assumption = None
+        if source == "agent_stated":
+            assumption = session.scalars(
+                select(Assumption).where(
+                    Assumption.run_id == run_id,
+                    Assumption.source == source,
+                    Assumption.text == text,
+                )
+            ).first()
+        if assumption is None:
+            assumption = Assumption(
+                run_id=run_id,
+                text=text,
+                source=source,
+                template_key=template_key,
+                status="not_tested",
+            )
+            session.add(assumption)
+            session.flush()
+            self._emit(
+                session, run_id, EventType.ASSUMPTION_RECORDED, EntityType.ASSUMPTION, assumption.id
+            )
+        session.add(
+            AssumptionLink(
+                assumption_id=assumption.id,
+                claim_id=claim_id,
+                operation_id=operation_id,
+                message_id=message_id,
+            )
+        )
+        session.flush()
+
+    def _history(self, conversation_id: str, run_id: str) -> list[dict[str, Any]]:
+        """Earlier turns for the model: questions and claims only (ADR-005, option A)."""
+        limit = 3
+        with self._sessions() as session:
+            runs = session.scalars(
+                select(AnalysisRun)
+                .where(AnalysisRun.conversation_id == conversation_id, AnalysisRun.id != run_id)
+                .order_by(AnalysisRun.created_at.desc())
+                .limit(limit)
+            ).all()
+            history = []
+            for run in reversed(runs):
+                question = session.scalar(
+                    select(ChatMessage.content).where(
+                        ChatMessage.run_id == run.id, ChatMessage.role == "user"
+                    )
+                )
+                claims = session.scalars(
+                    select(Claim.text).where(Claim.run_id == run.id).order_by(Claim.sequence_no)
+                ).all()
+                history.append(
+                    {
+                        "question": question or "",
+                        "status": run.status,
+                        "claims": list(claims),
+                        "error_code": (run.error_json or {}).get("code"),
+                    }
+                )
+            return history
+
     def _usage_json(self, usage: _Usage, started: float) -> dict[str, Any]:
         return {**usage.__dict__, "wall_ms": int((self._clock() - started) * 1000)}
 
@@ -637,4 +779,5 @@ class AgentOrchestrator:
             run.error_json = error
             run.completed_at = utcnow()
             run.usage_json = self._usage_json(usage, started)
+            self._emit(session, run_id, EventType.RUN_FAILED, EntityType.RUN, run_id)
         return RunResult(run_id, conversation_id, RunStatus.FAILED, error=error)
