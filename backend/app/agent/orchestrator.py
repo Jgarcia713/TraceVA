@@ -25,6 +25,7 @@ from typing import Any
 
 from pydantic import ValidationError
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.agent.model_client import LLMClient, LLMUnavailableError, ModelResponse, ToolCallRequest
@@ -76,6 +77,31 @@ class RunFailure(StrEnum):
     NO_DATASETS = "NO_DATASETS"
     CONTEXT_EXHAUSTED = "CONTEXT_EXHAUSTED"
     INTERNAL_ERROR = "INTERNAL_ERROR"
+    INTERRUPTED = "INTERRUPTED"
+
+
+class UnknownConversationError(LookupError):
+    pass
+
+
+class ConversationBusyError(RuntimeError):
+    """The conversation already has a running run (one at a time per conversation)."""
+
+    def __init__(self, conversation_id: str, active_run_id: str | None) -> None:
+        super().__init__(f"conversation {conversation_id} already has a running run")
+        self.conversation_id = conversation_id
+        self.active_run_id = active_run_id
+
+
+@dataclass(frozen=True)
+class PendingRun:
+    """A started run (persisted, status 'running') that has not executed yet."""
+
+    run_id: str
+    conversation_id: str
+    question_message_id: str
+    question: str
+    datasets: list[dict[str, Any]]
 
 
 @dataclass(frozen=True)
@@ -153,12 +179,27 @@ class AgentOrchestrator:
     # ------------------------------------------------------------------ public
 
     def ask(self, question: str, conversation_id: str | None = None) -> RunResult:
-        started = self._clock()
-        usage = _Usage()
+        """Start and execute a run synchronously (CLI, tests)."""
+        return self.run(self.start(question, conversation_id))
+
+    def start(self, question: str, conversation_id: str | None = None) -> PendingRun:
+        """Persist the question and a 'running' run; fast, raises on caller errors.
+
+        Raises UnknownConversationError or ConversationBusyError. The run must then be
+        executed with `run()` on this same orchestrator instance.
+        """
         datasets = self._dataset_context()
-        run_id, conversation_id = self._start_run(question, conversation_id, datasets)
+        return self._start_run(question, conversation_id, datasets)
+
+    def run(self, pending: PendingRun) -> RunResult:
+        """Execute a started run. Never raises; always ends completed or failed."""
+        run_id, conversation_id = pending.run_id, pending.conversation_id
+        started = self._clock()  # budgets start here, not while queued
+        usage = _Usage()
         try:
-            return self._loop(run_id, conversation_id, question, datasets, usage, started)
+            return self._loop(
+                run_id, conversation_id, pending.question, pending.datasets, usage, started
+            )
         except Exception as exc:  # never leave a run silently 'running'
             logger.exception("run %s failed unexpectedly", run_id)
             return self._fail(
@@ -592,7 +633,7 @@ class AgentOrchestrator:
 
     def _start_run(
         self, question: str, conversation_id: str | None, datasets: list[dict[str, Any]]
-    ) -> tuple[str, str]:
+    ) -> PendingRun:
         s = self._settings
         config = {
             "llm": self._llm.describe(),
@@ -614,12 +655,23 @@ class AgentOrchestrator:
                 session.flush()
                 conversation_id = conversation.id
             elif session.get(Conversation, conversation_id) is None:
-                raise ValueError(f"unknown conversation: {conversation_id}")
+                raise UnknownConversationError(f"unknown conversation: {conversation_id}")
+            active = session.scalar(
+                select(AnalysisRun.id).where(
+                    AnalysisRun.conversation_id == conversation_id,
+                    AnalysisRun.status == RunStatus.RUNNING,
+                )
+            )
+            if active is not None:
+                raise ConversationBusyError(conversation_id, active)
             run = AnalysisRun(
                 conversation_id=conversation_id, status=RunStatus.RUNNING, config_json=config
             )
             session.add(run)
-            session.flush()
+            try:
+                session.flush()
+            except IntegrityError as exc:  # lost a race: the partial unique index fired
+                raise ConversationBusyError(conversation_id, None) from exc
             question_message = ChatMessage(
                 conversation_id=conversation_id,
                 run_id=run.id,
@@ -634,7 +686,7 @@ class AgentOrchestrator:
                 session, run.id, EventType.USER_MESSAGE, EntityType.MESSAGE, question_message.id
             )
             self._emit(session, run.id, EventType.RUN_STARTED, EntityType.RUN, run.id)
-            return run.id, conversation_id
+            return PendingRun(run.id, conversation_id, question_message.id, question, datasets)
 
     def _record_model_call(
         self,

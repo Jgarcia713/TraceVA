@@ -82,3 +82,17 @@ python scripts/ask.py --show-evidence "Is age related to income?"
 ```
 
 Each run records its operations, evidence, claims, and model calls in SQLite. Expect 1.5–7 minutes per question on a laptop CPU. Tests use a scripted fake model and need no Ollama.
+
+## HTTP API (Milestone 3)
+
+```powershell
+uvicorn app.main:create_app --factory          # single process only (see docs/architecture.md)
+curl -X POST http://127.0.0.1:8000/api/v1/conversations
+curl -X POST http://127.0.0.1:8000/api/v1/conversations/<conv_id>/messages `
+     -H "Content-Type: application/json" -d '{"content": "Mean hours for people over 40?"}'
+# -> 202 {"run_id": ..., "links": {"run": ..., "graph": ..., "timeline": ...}}
+curl http://127.0.0.1:8000/api/v1/runs/<run_id>          # poll until status != running
+curl http://127.0.0.1:8000/api/v1/runs/<run_id>/graph
+```
+
+Interactive docs: http://127.0.0.1:8000/docs

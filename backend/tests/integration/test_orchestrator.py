@@ -182,7 +182,7 @@ def test_follow_up_in_same_conversation(
             .order_by(ChatMessage.sequence_no)
         ).all()
     assert seqs == [1, 2, 3, 4]
-    with pytest.raises(ValueError, match="unknown conversation"):
+    with pytest.raises(LookupError, match="unknown conversation"):
         make_agent(session_factory, agent_settings, [])[0].ask("Q", conversation_id="conv_nope")
 
 

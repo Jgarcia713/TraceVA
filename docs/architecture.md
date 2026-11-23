@@ -2,7 +2,7 @@
 
 The design target is `docs/TRACEVA_BACKEND_CONTEXT.md`. This document describes what currently exists; decisions and their rationale are in `docs/decisions/`.
 
-**Status:** Milestones 0–2 complete, plus `create_view` and M3a (provenance data layer: timeline, assumptions, computed graph) as of 2026-11-23. HTTP endpoints for runs and graphs are M3b. The agent runs from the CLI only. Timeline events, assumptions, the provenance graph API, HTTP endpoints for asking questions, and challenge branches are not built yet.
+**Status:** Milestones 0–3 complete (2026-11-23): agent runs over HTTP with polling, persisted timeline and assumptions, computed provenance graph. Challenge branches (M4) are not built yet. The agent runs from the CLI only. Timeline events, assumptions, the provenance graph API, HTTP endpoints for asking questions, and challenge branches are not built yet.
 
 ## Components
 
@@ -10,7 +10,8 @@ The design target is `docs/TRACEVA_BACKEND_CONTEXT.md`. This document describes 
 scripts/ask.py ──► app/agent/orchestrator.py ──► LLMClient (OpenAI SDK → Ollama /v1)
                          │   prompts.py, tool_registry.py (schemas, hash, execute)
                          ▼
-FastAPI (app/main.py)  /api/v1/health, /api/v1/datasets[/{id}]   read-only
+FastAPI (app/main.py)  see "HTTP API" below; runs execute in background threads
+                       (app/agent/runner.py: RunManager, startup reconciliation)
    │
    ├── app/api/            routes, error envelope + request IDs (errors.py)
    ├── app/analysis/
@@ -26,6 +27,28 @@ FastAPI (app/main.py)  /api/v1/health, /api/v1/datasets[/{id}]   read-only
 SQLite (Alembic-managed) ← datasets, conversations, runs, model calls, operations, evidence, claims
 datasets/ (gitignored raw files, hash-pinned)
 ```
+
+## HTTP API (`/api/v1`)
+
+| Method and path | Purpose |
+|---|---|
+| `GET /health` | Database reachability and schema revision vs. head |
+| `GET /datasets`, `GET /datasets/{id}` | Registered sources, root view IDs, column schema |
+| `POST /conversations` | Start a conversation |
+| `GET /conversations/{id}` | Includes `active_run_id` |
+| `GET /conversations/{id}/messages?after&limit` | Chat history. Assistant messages carry `verified: false` and `unverified_numbers` |
+| `POST /conversations/{id}/messages` | Ask a question: **202** with `run_id` and poll links. **409 `CONVERSATION_BUSY`** while a run is active. **404** for an unknown conversation |
+| `GET /runs/{id}` | Status (poll target), operations, claims with citations and assumptions (stated with scope, derived), answer, usage, config snapshot |
+| `GET /runs/{id}/graph?at_sequence=N` | Computed graph; a snapshot when `at_sequence` is given |
+| `GET /evidence/{id}` | Full stored result of an operation |
+| `GET /conversations/{id}/timeline?after&limit` | Ordered events (cursor pagination by `sequence_no`) |
+| `GET /messages/{id}/related` | Chat selection → the run's entity IDs grouped by type, plus event sequence numbers |
+
+Runtime rules:
+- **Background execution:** a `ThreadPoolExecutor` (`MAX_CONCURRENT_RUNS`, default 2). Budgets start when a run begins executing, not while it is queued; a queued run is still shown as `running`.
+- **One running run per conversation:** checked in code, and enforced by a partial unique index so concurrent requests cannot race past the check.
+- **Single process only:** at startup, runs left `running` are marked `failed` with `INTERRUPTED` and a `RUN_FAILED` event. Shutdown waits for in-flight runs and cancels queued ones (the next startup marks those as interrupted).
+- **SQLite WAL mode** plus a 5 s busy timeout on the app engine, so API reads proceed while a run writes.
 
 ## Data model
 

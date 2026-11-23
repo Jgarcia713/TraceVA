@@ -99,6 +99,16 @@ class AnalysisRun(Base):
     """
 
     __tablename__ = "analysis_runs"
+    __table_args__ = (
+        # At most one running run per conversation, enforced by the database so that
+        # concurrent requests cannot race past an application-level check.
+        Index(
+            "uq_analysis_runs_one_running_per_conversation",
+            "conversation_id",
+            unique=True,
+            sqlite_where=text("status = 'running'"),
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(40), primary_key=True, default=lambda: new_id("run"))
     conversation_id: Mapped[str] = mapped_column(ForeignKey("conversations.id"), index=True)

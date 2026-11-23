@@ -2,27 +2,17 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
-from typing import Annotated
-
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.analysis.registry import root_view_id
+from app.api.deps import SessionDep
 from app.api.errors import ApiError
 from app.db.models import DatasetSource
 from app.schemas.api import DatasetColumn, DatasetSummary
 
 router = APIRouter(prefix="/datasets", tags=["datasets"])
-
-
-def get_session(request: Request) -> Iterator[Session]:
-    with request.app.state.session_factory() as session:
-        yield session
-
-
-SessionDep = Annotated[Session, Depends(get_session)]
 
 
 def _summary(session: Session, source: DatasetSource) -> DatasetSummary:
