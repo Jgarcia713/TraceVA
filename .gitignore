@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local config and databases
+.env
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Raw datasets are not redistributed (ADR-001); keep documentation only
+datasets/**
+!datasets/
+!datasets/README.md
+
+# Editors / OS
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store

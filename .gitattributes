@@ -1,0 +1,2 @@
+# Dataset fixtures are hash-pinned (ADR-001): never convert line endings.
+backend/tests/fixtures/** -text
