@@ -43,8 +43,24 @@ React 18 + TypeScript + Vite, Plotly (`plotly.js-dist-min`), React Flow (`@xyflo
   - chip tooltips replaced the questions as accessible names
   - the chat did not scroll to new answers
 
+## Modern-web-guidance pass (2026-11-23)
+Guides consulted with the `modern-web-guidance` plugin: `accessibility`, `spinner`, `slider`, `css-layout`, `improve-text-layout-and-legibility`, `performance`. Applied:
+- **Live updates:**
+  - one polite live region announces answer completion or failure (not loading states)
+  - the ask error is `role="alert"`
+  - the busy indicator is a native indeterminate `<progress>`, slowed under `prefers-reduced-motion` and drawn in system colors under forced colors
+- **Charts:** a data table (`<details>`, with each row's `n`) under every chart as its accessible alternative; the Plotly canvas is `aria-hidden`.
+- **Labels and structure:** a real `<label>` for the question input (the placeholder had been the only label), an `<h1>`, `aria-valuetext` and `accent-color` on the timeline slider.
+- **Sizes and contrast:** minimum 24 px targets for small buttons, chips, and summaries; the loose-number text darkened to at least 4.5:1.
+- **Layout:** `scrollbar-gutter: stable` and `overscroll-behavior: contain` on panel scrollers; `text-wrap: balance` on headings and `pretty` on answer and claim text.
+- **Performance** (own decision, not from a guide): Plotly is loaded by dynamic `import()` on first chart and switched to the official basic bundle (bar, scatter, pie). The initial JS is 337 kB (110 kB gzip), down from ~5 MB; the Plotly chunk is 1.1 MB, down from 4.7 MB.
+- **Bug found while verifying:** the visually hidden table `<caption>` (absolutely positioned) escaped the scroll containers and made the whole page scroll by 36 px. Panels are now `position: relative`; the document height equals the viewport again.
+- **Browser-verified:** label association, live-region text, no unnamed buttons, data table contents (it shows the omitted HS-grad row: 16.0%, n = 10,501), and the lazy chart rendering.
+
+The guidance tool requires Node 22; it was run through a temporary `npx -p node@22`, and the system Node (20.19) was unchanged.
+
 ## Known limitations
 - A rough draft: desktop layout only (designed for a 1080p projector); the graph layout is a simple column layout by node type.
-- Plotly makes the production bundle large (> 500 kB); acceptable for a local demo.
+- The Plotly chunk is still 1.1 MB, loaded on first chart.
 - No frontend tests yet; types are checked with `tsc` and the build passes.
 - Replay timing (0.6 s per step) is a display choice and says nothing about real model latency (median 162 s per question on the CPU laptop).

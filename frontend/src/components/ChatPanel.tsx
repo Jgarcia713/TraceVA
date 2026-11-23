@@ -63,7 +63,11 @@ export function ChatPanel(props: Props) {
           ))}
       </div>
 
-      {props.error && <div className="error-banner">{props.error}</div>}
+      {props.error && (
+        <div className="error-banner" role="alert">
+          {props.error}
+        </div>
+      )}
 
       {demo?.enabled && (
         <div className="demo-questions">
@@ -90,11 +94,16 @@ export function ChatPanel(props: Props) {
           send(draft);
         }}
       >
+        <label htmlFor="question" className="visually-hidden">
+          Question about the dataset
+        </label>
         <input
+          id="question"
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
-          placeholder={busy ? "Analysis running…" : "Ask a question…"}
+          placeholder={busy ? "Analysis running…" : "e.g. Mean hours for people over 40?"}
           disabled={busy}
+          autoComplete="off"
         />
         <button type="submit" disabled={busy || !draft.trim()}>
           Ask
@@ -160,7 +169,8 @@ function Progress({ run }: { run: RunDetail }) {
   return (
     <div className="msg msg-progress">
       <div className="spinner-row">
-        <span className="spinner" /> Analysis running…
+        {/* Native indeterminate <progress>: announced as busy without a live region. */}
+        <progress className="loading-spinner" aria-label="Analysis running" /> Analysis running…
       </div>
       <ol className="progress-ops">
         {run.operations.map((op) => (

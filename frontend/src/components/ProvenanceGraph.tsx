@@ -156,6 +156,7 @@ export function ProvenanceGraph({ graph, selectedClaimId, sequenceRange, atSeque
             min={sequenceRange[0]}
             max={sequenceRange[1]}
             value={atSequence ?? sequenceRange[1]}
+            aria-valuetext={`event ${atSequence ?? sequenceRange[1]} of ${sequenceRange[1]}`}
             onChange={(e) => {
               const value = Number(e.target.value);
               onSequence(value >= sequenceRange[1] ? null : value);

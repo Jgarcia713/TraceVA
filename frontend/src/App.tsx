@@ -18,6 +18,8 @@ export function App() {
   const [atSequence, setAtSequence] = useState<number | null>(null);
   const [charts, setCharts] = useState<ChartSpec[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Single polite live region for meaningful completions (not "loading" states).
+  const [announcement, setAnnouncement] = useState("");
   const pollTimer = useRef<number | null>(null);
 
   const startConversation = useCallback(async () => {
@@ -56,6 +58,11 @@ export function App() {
         return;
       }
       setActiveRunId(null);
+      setAnnouncement(
+        run.status === "completed"
+          ? `Answer ready with ${run.claims.length} claim${run.claims.length === 1 ? "" : "s"}.`
+          : `Analysis failed: ${run.error?.code ?? "unknown error"}.`,
+      );
       await refreshMessages(conversationId);
       setSelectedClaimId(run.claims[0]?.id ?? null);
     };
@@ -114,11 +121,14 @@ export function App() {
     <div className="app">
       <header className="topbar">
         <div className="brand">
-          <strong>TraceVA</strong>
+          <h1>TraceVA</h1>
           <span>explainable agentic visual analytics · prototype</span>
         </div>
         {demo?.enabled && <div className="demo-notice">{demo.notice}</div>}
       </header>
+      <div className="visually-hidden" aria-live="polite">
+        {announcement}
+      </div>
       <main className="layout">
         <ChatPanel
           messages={messages}

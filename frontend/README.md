@@ -1,6 +1,6 @@
 # TraceVA frontend (prototype)
 
-React + TypeScript (Vite), Plotly for charts, React Flow for the provenance graph. A rough draft for the interim presentation, built on the existing backend API.
+React + TypeScript (Vite), Plotly (basic bundle, lazy-loaded) for charts, React Flow for the provenance graph. A rough draft for the interim presentation, built on the existing backend API.
 
 ## Run
 
