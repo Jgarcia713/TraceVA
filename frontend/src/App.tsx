@@ -5,6 +5,13 @@ import { ClaimInspector } from "./components/ClaimInspector";
 import { ProvenanceGraph } from "./components/ProvenanceGraph";
 
 const POLL_MS = 600;
+const MAX_POLL_DELAY_MS = 8000;
+const MAX_POLL_FAILURES = 10; // about a minute of retries with backoff
+const RETRY_PREFIX = "Connection problem";
+
+function errorMessage(e: unknown): string {
+  return e instanceof ApiError ? `${e.body.code}: ${e.body.message}` : e instanceof Error ? e.message : String(e);
+}
 
 export function App() {
   const [demo, setDemo] = useState<DemoInfo | null>(null);
@@ -20,18 +27,27 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
   // Single polite live region for meaningful completions (not "loading" states).
   const [announcement, setAnnouncement] = useState("");
-  const pollTimer = useRef<number | null>(null);
+
+  // The poll loop must see the *current* selection, not the one captured when it started.
+  const selectedRunRef = useRef<string | null>(null);
+  useEffect(() => {
+    selectedRunRef.current = selectedRunId;
+  }, [selectedRunId]);
 
   const startConversation = useCallback(async () => {
-    const conversation = await api.createConversation();
-    setConversationId(conversation.id);
-    setMessages([]);
-    setRuns({});
-    setSelectedRunId(null);
-    setSelectedClaimId(null);
-    setGraph(null);
-    setCharts(null);
-    setError(null);
+    try {
+      const conversation = await api.createConversation();
+      setConversationId(conversation.id);
+      setMessages([]);
+      setRuns({});
+      setSelectedRunId(null);
+      setSelectedClaimId(null);
+      setGraph(null);
+      setCharts(null);
+      setError(null);
+    } catch (e) {
+      setError(`Could not start a conversation (${errorMessage(e)}). Is the backend running?`);
+    }
   }, []);
 
   const initialized = useRef(false);
@@ -46,60 +62,112 @@ export function App() {
     setMessages((await api.messages(conversation)).items);
   }, []);
 
-  // Poll the active run until it finishes; keep its graph live while it grows.
+  // Poll the active run until it finishes. Network errors are retried with backoff
+  // instead of silently stopping (which would leave the UI busy forever).
   useEffect(() => {
     if (!activeRunId || !conversationId) return;
+    let cancelled = false;
+    let timer: number | undefined;
+    let failures = 0;
+    const schedule = (ms: number) => {
+      timer = window.setTimeout(() => void tick(), ms);
+    };
     const tick = async () => {
-      const run = await api.run(activeRunId);
-      setRuns((r) => ({ ...r, [run.id]: run }));
-      setGraph(await api.graph(run.id));
-      if (run.status === "running") {
-        pollTimer.current = window.setTimeout(tick, POLL_MS);
-        return;
+      try {
+        const run = await api.run(activeRunId);
+        if (cancelled) return;
+        setRuns((r) => ({ ...r, [run.id]: run }));
+        if (selectedRunRef.current === run.id) {
+          // Only the run being viewed may replace the graph.
+          const live = await api.graph(run.id);
+          if (!cancelled && selectedRunRef.current === run.id) setGraph(live);
+        }
+        if (failures > 0) setError((prev) => (prev?.startsWith(RETRY_PREFIX) ? null : prev));
+        failures = 0;
+        if (run.status === "running") {
+          schedule(POLL_MS);
+          return;
+        }
+        setActiveRunId(null);
+        setAnnouncement(
+          run.status === "completed"
+            ? `Answer ready with ${run.claims.length} claim${run.claims.length === 1 ? "" : "s"}.`
+            : `Analysis failed: ${run.error?.code ?? "unknown error"}.`,
+        );
+        if (selectedRunRef.current === run.id) setSelectedClaimId(run.claims[0]?.id ?? null);
+        try {
+          await refreshMessages(conversationId);
+        } catch (e) {
+          setError(`Could not refresh messages (${errorMessage(e)}).`);
+        }
+      } catch (e) {
+        if (cancelled) return;
+        failures += 1;
+        if (failures >= MAX_POLL_FAILURES) {
+          setActiveRunId(null);
+          setError(`Lost contact with the backend while a run was active (${errorMessage(e)}). Reload to see its final status.`);
+          return;
+        }
+        setError(`${RETRY_PREFIX} (${errorMessage(e)}); retrying…`);
+        schedule(Math.min(POLL_MS * 2 ** failures, MAX_POLL_DELAY_MS));
       }
-      setActiveRunId(null);
-      setAnnouncement(
-        run.status === "completed"
-          ? `Answer ready with ${run.claims.length} claim${run.claims.length === 1 ? "" : "s"}.`
-          : `Analysis failed: ${run.error?.code ?? "unknown error"}.`,
-      );
-      await refreshMessages(conversationId);
-      setSelectedClaimId(run.claims[0]?.id ?? null);
     };
     void tick();
     return () => {
-      if (pollTimer.current) window.clearTimeout(pollTimer.current);
+      cancelled = true;
+      if (timer !== undefined) window.clearTimeout(timer);
     };
   }, [activeRunId, conversationId, refreshMessages]);
 
-  // Selected run: (re)load its graph, at a snapshot if the slider is moved.
+  // Selected run (not the live one): its graph, at a snapshot if the slider is moved.
   useEffect(() => {
     if (!selectedRunId || activeRunId === selectedRunId) return;
-    api.graph(selectedRunId, atSequence ?? undefined).then(setGraph).catch(() => setGraph(null));
+    let cancelled = false; // ignore responses for a selection the user already left
+    api
+      .graph(selectedRunId, atSequence ?? undefined)
+      .then((g) => !cancelled && setGraph(g))
+      .catch(() => !cancelled && setGraph(null));
+    return () => {
+      cancelled = true;
+    };
   }, [selectedRunId, atSequence, activeRunId]);
 
   // Selected claim: its charts (backend chart specs from the cited evidence).
   useEffect(() => {
-    if (!selectedClaimId) {
-      setCharts(null);
-      return;
-    }
     setCharts(null);
-    api.claimCharts(selectedClaimId).then((r) => setCharts(r.charts)).catch(() => setCharts([]));
+    if (!selectedClaimId) return;
+    let cancelled = false;
+    api
+      .claimCharts(selectedClaimId)
+      .then((r) => !cancelled && setCharts(r.charts))
+      .catch(() => !cancelled && setCharts([]));
+    return () => {
+      cancelled = true;
+    };
   }, [selectedClaimId]);
 
   const ask = async (question: string) => {
-    if (!conversationId) return;
+    if (!conversationId) {
+      setError("No conversation yet: the backend may be unavailable. Try “New conversation”.");
+      return;
+    }
     setError(null);
+    let runId: string;
     try {
-      const accepted = await api.ask(conversationId, question);
-      setSelectedRunId(accepted.run_id);
-      setSelectedClaimId(null);
-      setAtSequence(null);
-      await refreshMessages(conversationId);
-      setActiveRunId(accepted.run_id);
+      runId = (await api.ask(conversationId, question)).run_id;
     } catch (e) {
-      setError(e instanceof ApiError ? `${e.body.code}: ${e.body.message}` : String(e));
+      setError(errorMessage(e));
+      return;
+    }
+    // Start polling first: the run executes on the server whatever happens below.
+    setSelectedRunId(runId);
+    setSelectedClaimId(null);
+    setAtSequence(null);
+    setActiveRunId(runId);
+    try {
+      await refreshMessages(conversationId);
+    } catch (e) {
+      setError(`Could not refresh messages (${errorMessage(e)}).`);
     }
   };
 
@@ -113,7 +181,7 @@ export function App() {
   const selectedClaim = selectedRun?.claims.find((c) => c.id === selectedClaimId) ?? null;
   const createdSeqs = graph?.nodes.map((n) => n.created_seq).filter((s): s is number => s !== null) ?? [];
   const sequenceRange: [number, number] | null =
-    selectedRun?.last_event_sequence && createdSeqs.length && !activeRunId
+    selectedRun?.last_event_sequence && createdSeqs.length && activeRunId !== selectedRunId
       ? [Math.min(...createdSeqs), selectedRun.last_event_sequence]
       : null;
 

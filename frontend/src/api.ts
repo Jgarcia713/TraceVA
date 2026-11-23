@@ -146,8 +146,22 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     headers: { "Content-Type": "application/json" },
     ...init,
   });
-  const body = await response.json();
-  if (!response.ok) throw new ApiError(response.status, body.error);
+  // A down backend reaches us as the dev proxy's 502/504 with an HTML or empty body:
+  // never assume JSON, and never assume the error envelope is present.
+  const isJson = response.headers.get("content-type")?.includes("application/json") ?? false;
+  const body: unknown = isJson ? await response.json().catch(() => null) : null;
+  if (!response.ok) {
+    const envelope = (body as { error?: ApiErrorBody } | null)?.error;
+    throw new ApiError(
+      response.status,
+      envelope ?? {
+        code: `HTTP_${response.status}`,
+        message: response.status >= 502 ? "backend unavailable" : response.statusText || "request failed",
+        request_id: "",
+      },
+    );
+  }
+  if (body === null) throw new ApiError(response.status, { code: "BAD_RESPONSE", message: "expected JSON", request_id: "" });
   return body as T;
 }
 

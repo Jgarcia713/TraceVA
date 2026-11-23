@@ -87,6 +87,11 @@ def collect() -> list[dict[str, Any]]:
     return rows
 
 
+def _cell(text: str) -> str:
+    """Markdown table cell: escape pipes and flatten newlines."""
+    return " ".join(text.split()).replace("|", r"\|")
+
+
 def markdown(rows: list[dict[str, Any]]) -> str:
     real = [r for r in rows if r["provider"] not in ("fake", "replay")]
     out = [f"Runs: {len(real)} (excluding fake/replay runs)", ""]
@@ -100,7 +105,8 @@ def markdown(rows: list[dict[str, Any]]) -> str:
         out.append(
             f"| {i} | {r['prompt_version']} | {status} | {r['model_calls']} | "
             f"{r['operations']} ({r['failed_operations']}, {r['repaired_failures']}) | "
-            f"{r['failure_codes'] or '-'} | {r['claims']} | {r['wall_s']} | {r['question'][:60]} |"
+            f"{r['failure_codes'] or '-'} | {r['claims']} | {r['wall_s']} | "
+            f"{_cell(r['question'][:60])} |"
         )
     if not real:
         return "\n".join(out)
@@ -119,8 +125,12 @@ def markdown(rows: list[dict[str, Any]]) -> str:
         f"- Wall time per run: median {statistics.median(walls):.0f} s, "
         f"min {min(walls):.0f} s, max {max(walls):.0f} s",
         f"- Model calls per run: median {statistics.median(r['model_calls'] for r in real)}",
-        f"- Prompt tokens per run: median "
-        f"{statistics.median(r['prompt_tokens'] or 0 for r in real):.0f}",
+        "- Prompt tokens per run: median "
+        + (
+            f"{statistics.median(tokens):.0f} (over {len(tokens)} runs with token data)"
+            if (tokens := [r["prompt_tokens"] for r in real if r["prompt_tokens"] is not None])
+            else "n/a"
+        ),
         "- Reasoning characters discarded: "
         f"{sum(r['reasoning_chars_discarded'] or 0 for r in real)}",
     ]

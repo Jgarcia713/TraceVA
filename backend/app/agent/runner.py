@@ -48,8 +48,9 @@ class RunManager:
         self._stopping = threading.Event()
 
     def submit(self, question: str, conversation_id: str) -> PendingRun:
-        """Start a run and schedule its execution. Raises UnknownConversationError or
-        ConversationBusyError before anything executes."""
+        """Start a run and schedule its execution. Raises UnknownConversationError,
+        ConversationBusyError, or (demo mode) UnknownDemoQuestionError before anything
+        executes."""
         orchestrator = AgentOrchestrator(
             self._sessions,
             self._llm_factory(),

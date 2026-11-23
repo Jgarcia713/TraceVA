@@ -11,10 +11,22 @@ $env:DATABASE_URL = "sqlite:///./demo.db"
 $env:LLM_PROVIDER = "replay"
 if (-not $env:DEMO_STEP_DELAY_S) { $env:DEMO_STEP_DELAY_S = "0.6" }
 
+# $ErrorActionPreference does not stop on native exit codes in Windows PowerShell 5.1,
+# so each setup step is checked explicitly before any server starts.
+function Invoke-Step($description, [scriptblock]$command) {
+  & $command
+  if ($LASTEXITCODE -ne 0) { throw "Demo setup failed: $description (exit code $LASTEXITCODE)" }
+}
+
 Push-Location $backend
-& .venv\Scripts\alembic upgrade head
-& .venv\Scripts\python scripts\register_datasets.py adult
-Pop-Location
+try {
+  Invoke-Step "database migration" { & .venv\Scripts\alembic upgrade head }
+  Invoke-Step "dataset registration (is datasets\adult\adult.data present?)" {
+    & .venv\Scripts\python scripts\register_datasets.py adult
+  }
+} finally {
+  Pop-Location
+}
 
 Start-Process powershell -WorkingDirectory $backend -ArgumentList @(
   "-NoExit", "-Command",

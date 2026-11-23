@@ -59,6 +59,22 @@ Guides consulted with the `modern-web-guidance` plugin: `accessibility`, `spinne
 
 The guidance tool requires Node 22; it was run through a temporary `npx -p node@22`, and the system Node (20.19) was unchanged.
 
+## Code review fixes (2026-11-23)
+An independent review of the prototype branch found 10 issues (5 important); all were fixed (192 backend tests). The review also traced the replay ID alignment and found it sound: every tool message maps to exactly one operation.
+
+| Issue | Fix |
+|---|---|
+| A failed poll left the UI busy forever (input and chips disabled) | Polling retries with backoff and shows a "retrying" alert; after about a minute it stops with a clear message. Polling starts before the message refresh. **Browser-verified:** with the backend killed mid-run, the alert appeared; after a restart, the run came back as `INTERRUPTED`, the alert cleared, and the input re-enabled |
+| The active run's poll overwrote the graph of an older run being inspected; on completion the wrong claim was selected | The poll updates the graph only when that run is selected, and auto-selects the new claim only then |
+| Fast claim or run switching could show stale charts or graphs | Both fetch effects ignore responses that arrive after the selection changed |
+| Grouped proportion charts drew categories cut by the size cap as 0% | Shown as unknown (a gap) with a note; drawn as 0 only when the group truncated nothing |
+| Claim-chart merging combined different measures (all proportion charts share one y label) | The merge key is the measure (title plus category or column); duplicate view labels get evidence IDs |
+| A non-JSON error (proxy 502/504) surfaced as a raw parse error; a failed start left Ask silently inert | Robust error parsing with a generic envelope; start-up failures show a banner |
+| Demo mode returned 422 instead of 404 for an unknown conversation | The conversation is checked before the replay bind; docstrings updated |
+| The run report mis-rendered `\|` or newlines in questions and counted missing token data as 0 | Cells escaped; median over runs with token data only |
+| The demo launcher ignored failed setup steps (PowerShell 5.1 does not stop on native exit codes) | Each step checks `$LASTEXITCODE` and aborts before starting servers |
+| The TypeScript build cache was committed | Untracked and gitignored |
+
 ## Known limitations
 - A rough draft: desktop layout only (designed for a 1080p projector); the graph layout is a simple column layout by node type.
 - The Plotly chunk is still 1.1 MB, loaded on first chart.

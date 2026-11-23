@@ -213,3 +213,13 @@ def test_demo_disabled_by_default() -> None:
 
     with TestClient(create_app(S(data_dir=FIXTURES_DIR, database_url="sqlite:///:memory:"))) as c:
         assert c.get(f"{API}/demo").json() == {"enabled": False, "notice": None, "questions": []}
+
+
+def test_unknown_conversation_takes_precedence_over_demo_question(
+    session_factory: sessionmaker[Session], settings: Settings, recorded: RecordedRun
+) -> None:
+    from app.agent.orchestrator import UnknownConversationError
+
+    agent = AgentOrchestrator(session_factory, ReplayLLMClient({QUESTION: recorded}), settings)
+    with pytest.raises(UnknownConversationError):
+        agent.start("Not recorded?", conversation_id="conv_nope")

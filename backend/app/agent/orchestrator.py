@@ -190,9 +190,14 @@ class AgentOrchestrator:
     def start(self, question: str, conversation_id: str | None = None) -> PendingRun:
         """Persist the question and a 'running' run; fast, raises on caller errors.
 
-        Raises UnknownConversationError or ConversationBusyError. The run must then be
-        executed with `run()` on this same orchestrator instance.
+        Raises UnknownConversationError, ConversationBusyError, or (replay clients only)
+        UnknownDemoQuestionError. The run must then be executed with `run()` on this
+        same orchestrator instance.
         """
+        if conversation_id is not None:  # unknown conversation takes precedence (404)
+            with self._sessions() as session:
+                if session.get(Conversation, conversation_id) is None:
+                    raise UnknownConversationError(f"unknown conversation: {conversation_id}")
         # Optional hook (replay clients): bind to the question before describe() is
         # snapshotted into the run config. May raise to reject the question up front.
         bind = getattr(self._llm, "bind_question", None)

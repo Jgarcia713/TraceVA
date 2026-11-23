@@ -59,22 +59,34 @@ def _summarize_chart(evidence_id: str, result: dict[str, Any]) -> ChartSpec | No
 
     x_label = " / ".join(group_by) if group_by else ""
     if first.get("proportions") is not None:
-        # One series per category; with groups, stacked shares per group (sum to 1).
+        # One series per category; with groups, stacked shares per group. Each group lists
+        # only its top categories (`other_count` counts the rest), so a category absent
+        # from a group's list is 0 only if that group truncated nothing; otherwise it is
+        # unknown (None, drawn as a gap) and the stack does not reach 100%.
         categories: list[ChartValue] = []
         for g in groups:
             for p in g["columns"][column]["proportions"]:
                 if p["value"] not in categories:
                     categories.append(p["value"])
+        truncated_groups = sum(1 for g in groups if g["columns"][column].get("other_count"))
+        if truncated_groups:
+            notes.append(
+                f"{truncated_groups} group(s) list only their most frequent categories; "
+                "other categories there are unknown, not zero, so stacks may not reach 100%."
+            )
         series = []
         for category in categories:
-            ys, ns = [], []
+            ys: list[float | None] = []
+            ns = []
             for g in groups:
                 summary = g["columns"][column]
-                share = next(
+                listed = next(
                     (p["proportion"] for p in summary["proportions"] if p["value"] == category),
-                    0.0,
+                    None,
                 )
-                ys.append(share)
+                if listed is None and not summary.get("other_count"):
+                    listed = 0.0  # nothing was truncated, so the category truly is absent
+                ys.append(listed)
                 ns.append(summary["n"])
             series.append(
                 ChartSeries(name=str(category), x=[key_of(g) for g in groups], y=ys, n=ns)
@@ -191,25 +203,34 @@ def claim_charts(cited: list[tuple[ChartSpec, str]]) -> list[ChartSpec]:
         for spec, label in cited
         if len(spec.series) == 1 and len(spec.series[0].x) == 1
     ]
-    by_measure: dict[tuple[str, str], list[tuple[ChartSpec, str]]] = {}
+    # Merge only identical measures: same chart title (metric + column) and, unless the
+    # bar is the whole view, the same bar (category or column). The y-axis label alone
+    # is shared by all proportion charts and would merge different columns.
+    by_measure: dict[tuple[str, str, ChartValue], list[tuple[ChartSpec, str]]] = {}
     for spec, label in single:
-        by_measure.setdefault((spec.y_label, spec.y_format), []).append((spec, label))
+        bar = spec.series[0].x[0]
+        key = (spec.title, spec.y_format, None if bar == "all rows" else bar)
+        by_measure.setdefault(key, []).append((spec, label))
     merged: list[ChartSpec] = []
     merged_ids: set[str] = set()
-    for (y_label, y_format), group in by_measure.items():
+    for (title, y_format, bar), group in by_measure.items():
         if len(group) < 2:
             continue
         merged_ids |= {spec.evidence_id for spec, _ in group}
+        labels = [label for _, label in group]
+        if len(set(labels)) < len(labels):  # same view cited twice: keep bars apart
+            labels = [f"{label} ({spec.evidence_id[:9]})" for spec, label in group]
+        y_label = group[0][0].y_label
         merged.append(
             ChartSpec(
                 chart_type="bar",
-                title=f"{y_label}: comparison across views",
+                title=f"{title}{f' = {bar}' if bar is not None else ''}: comparison across views",
                 x_label="view",
                 y_label=y_label,
                 series=[
                     ChartSeries(
                         name=y_label,
-                        x=[label for _, label in group],
+                        x=list(labels),
                         y=[spec.series[0].y[0] for spec, _ in group],
                         n=[spec.series[0].n[0] for spec, _ in group],
                     )

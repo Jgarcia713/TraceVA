@@ -123,3 +123,70 @@ def test_claim_charts_merge_single_value_comparisons() -> None:
     assert merged.evidence_id == "ev_m,ev_w"
     (single,) = claim_charts([(men, "sex = Male")])  # a single bar is named after its view
     assert single.series[0].x == ["sex = Male"] and single.series[0].y == men.series[0].y
+
+
+def test_categories_cut_by_the_cap_are_unknown_not_zero() -> None:
+    def props(**shares: float) -> list[dict[str, Any]]:
+        return [{"value": k, "count": 0, "proportion": v} for k, v in shares.items()]
+
+    result = {
+        "group_by": ["race"],
+        "metrics": ["proportions"],
+        "truncated": False,
+        "total_groups": 2,
+        "groups": [
+            group({"race": "A"}, 100, proportions=props(us=0.5, ph=0.3), other_count=20),
+            group({"race": "B"}, 50, proportions=props(us=0.9, ph=0.1), other_count=0),
+            group({"race": "C"}, 50, proportions=props(us=1.0), other_count=0),
+        ],
+    }
+    spec = chart_for_evidence("summarize", "ev_7", result)
+    assert spec is not None
+    by_name = {s.name: s.y for s in spec.series}
+    assert by_name["ph"] == [0.3, 0.1, 0.0]  # C truncated nothing: truly absent = 0
+    result["groups"][2]["columns"]["c"]["other_count"] = 5
+    spec = chart_for_evidence("summarize", "ev_7", result)
+    assert spec is not None
+    assert {s.name: s.y for s in spec.series}["ph"][2] is None  # cut by the cap: unknown
+    assert any("unknown, not zero" in note for note in spec.notes)
+
+
+def test_claim_charts_do_not_merge_different_measures() -> None:
+    def share(ev: str, category: str) -> Any:
+        return chart_for_evidence(
+            "summarize",
+            ev,
+            {
+                "group_by": [],
+                "metrics": ["proportions"],
+                "truncated": False,
+                "total_groups": 1,
+                "groups": [
+                    group({}, 10, proportions=[{"value": category, "count": 10, "proportion": 1.0}])
+                ],
+            },
+        )
+
+    sex, income = share("ev_s", "Male"), share("ev_i", ">50K")
+    assert sex is not None and income is not None
+    charts = claim_charts([(sex, "sex = Male"), (income, "income = >50K")])
+    assert len(charts) == 2  # different columns/categories stay separate
+
+    def one_bar(ev: str, y: float) -> Any:
+        return chart_for_evidence(
+            "summarize",
+            ev,
+            {
+                "group_by": [],
+                "metrics": ["mean"],
+                "truncated": False,
+                "total_groups": 1,
+                "groups": [group({}, 5, mean=y)],
+            },
+        )
+
+    a, b = one_bar("ev_aaaaaaaa1", 1.0), one_bar("ev_bbbbbbbb2", 2.0)
+    assert a is not None and b is not None
+    (merged,) = claim_charts([(a, "all rows"), (b, "all rows")])
+    labels = merged.series[0].x
+    assert len(set(labels)) == 2  # same view cited twice: bars kept apart
