@@ -275,4 +275,3 @@ def test_app_engine_uses_wal(settings: Settings, migrated_db: str) -> None:
             assert conn.exec_driver_sql("PRAGMA busy_timeout").scalar() == 5000
     finally:
         engine.dispose()
-
