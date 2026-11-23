@@ -33,7 +33,9 @@ A new agent tool `create_view(view_id, filters)` builds filtered views that `sum
 2. **Inventing IDs is the new dominant failure mode** for this 4B model on multi-filter questions. Listing valid IDs in the error helped only after 2–3 more attempts. This is a model-reliability property to measure in evaluation (invented-ID rate, steps to recover), not something to patch per question.
 3. **Six steps is tight for filter questions.** The minimum path is `create_view` → `summarize` → `submit_answer` (3 steps); one repair or an extra `inspect_dataset` leaves little slack.
 
-## Open options (not implemented; for the project owner)
-- Raise the default `MAX_AGENT_STEPS` from 6 to 8.
-- Reduce the need to copy IDs, for example by accepting a dataset name such as `adult` as an alias for its root view. Lineage would still record the resolved ID.
-- Compare against `qwen3.5:9b` or thinking mode, which may copy IDs more reliably (the RTX 4070 laptop is better suited for this).
+## Follow-up decisions (project owner, 2026-11-23)
+- **Done:** the default `MAX_AGENT_STEPS` is raised from 6 to 8.
+- **Monitor, not implemented:** how often the model invents IDs, to be measured in evaluation. Candidate mitigations if it stays common:
+  - Dataset names as aliases for root views (e.g. `adult`).
+  - Run-scoped short aliases (e.g. `v1`, `e1`) that the orchestrator maps to full IDs. Lineage and the database keep the full IDs. Notably, the invented IDs (`view_1`, `view_2`) already look like short aliases, so this may match the model's expectations. Open question: whether claims would cite aliases (resolved on the server) or full IDs.
+- **Open:** compare `qwen3.5:9b` or thinking mode, ideally on the RTX 4070 laptop.

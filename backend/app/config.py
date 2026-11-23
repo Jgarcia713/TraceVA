@@ -38,7 +38,9 @@ class Settings(BaseSettings):
     llm_output_reserve_tokens: int = Field(default=1024, ge=128)
 
     # --- Agent budgets ---
-    max_agent_steps: int = Field(default=6, ge=1, le=20)
+    # 8: a filter question needs >= 3 steps (create_view, summarize, submit_answer);
+    # 6 left too little room for repairs (docs/implementation/create-view.md).
+    max_agent_steps: int = Field(default=8, ge=1, le=20)
     max_run_seconds: float = Field(default=900.0, gt=0)
     max_tool_calls_per_step: int = Field(default=4, ge=1, le=10)
     max_tool_result_chars: int = Field(default=6000, ge=500, le=50_000)
