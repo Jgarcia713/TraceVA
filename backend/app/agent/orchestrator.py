@@ -193,6 +193,11 @@ class AgentOrchestrator:
         Raises UnknownConversationError or ConversationBusyError. The run must then be
         executed with `run()` on this same orchestrator instance.
         """
+        # Optional hook (replay clients): bind to the question before describe() is
+        # snapshotted into the run config. May raise to reject the question up front.
+        bind = getattr(self._llm, "bind_question", None)
+        if callable(bind):
+            bind(question)
         datasets = self._dataset_context()
         return self._start_run(question, conversation_id, datasets)
 

@@ -14,8 +14,9 @@ from fastapi import FastAPI
 from sqlalchemy.exc import OperationalError
 
 from app.agent.model_client import LLMClient, OpenAICompatClient
+from app.agent.replay import RecordedRun, ReplayLLMClient, load_catalog
 from app.agent.runner import RunManager, reconcile_interrupted_runs
-from app.api import conversations, datasets, health, runs
+from app.api import conversations, datasets, demo, health, runs
 from app.api.errors import install_error_handling
 from app.config import Settings, get_settings
 from app.db.session import create_app_engine, create_session_factory
@@ -33,7 +34,20 @@ def create_app(
     resolved: Settings = settings
     engine = create_app_engine(resolved.database_url)
     session_factory = create_session_factory(engine)
-    make_llm = llm_factory or (lambda: OpenAICompatClient(resolved))
+    catalog: dict[str, RecordedRun] = {}
+    if llm_factory is not None:
+        make_llm = llm_factory
+    elif resolved.llm_provider == "replay":
+        catalog = load_catalog(resolved.demo_catalog_path)
+        delay = resolved.demo_step_delay_s
+
+        def make_llm() -> LLMClient:
+            return ReplayLLMClient(catalog, step_delay_s=delay)
+
+    else:
+
+        def make_llm() -> LLMClient:
+            return OpenAICompatClient(resolved)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -62,8 +76,9 @@ def create_app(
     app.state.session_factory = session_factory
     app.state.api_prefix = API_PREFIX
     app.state.startup_errors = []
+    app.state.demo_catalog = catalog
 
     install_error_handling(app)
-    for module in (health, datasets, conversations, runs):
+    for module in (health, datasets, conversations, runs, demo):
         app.include_router(module.router, prefix=API_PREFIX)
     return app

@@ -22,7 +22,10 @@ class Settings(BaseSettings):
     max_tool_result_rows: int = Field(default=30, ge=1, le=500)
 
     # --- LLM (Milestone 2). Provider-agnostic OpenAI-compatible transport. ---
-    llm_provider: str = "ollama"  # label recorded in run metadata
+    llm_provider: str = "ollama"  # label in run metadata; "replay" enables demo mode
+    # Demo mode (LLM_PROVIDER=replay): recorded real model responses, live computation.
+    demo_catalog_path: Path = BACKEND_DIR / "demo" / "catalog.json"
+    demo_step_delay_s: float = Field(default=0.6, ge=0, le=10)
     llm_base_url: str = "http://localhost:11434/v1"
     llm_model: str = "traceva-qwen3.5-4b-8k"  # see ollama/*.Modelfile
     llm_api_key: SecretStr = SecretStr("ollama")  # never logged or persisted

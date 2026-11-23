@@ -8,6 +8,7 @@ from fastapi import APIRouter, Query, Request, status
 from sqlalchemy import select
 
 from app.agent.orchestrator import ConversationBusyError, RunStatus, UnknownConversationError
+from app.agent.replay import UnknownDemoQuestionError
 from app.api.deps import RunManagerDep, SessionDep
 from app.api.errors import ApiError
 from app.api.views import message_out
@@ -95,6 +96,8 @@ def post_message(
         pending = manager.submit(body.content, conversation_id)
     except UnknownConversationError as exc:
         raise ApiError(404, "UNKNOWN_CONVERSATION", str(exc)) from exc
+    except UnknownDemoQuestionError as exc:
+        raise ApiError(422, "DEMO_UNKNOWN_QUESTION", str(exc)) from exc
     except ConversationBusyError as exc:
         raise ApiError(
             409,
