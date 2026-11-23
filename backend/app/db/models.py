@@ -35,7 +35,9 @@ class DatasetView(Base):
     """A reproducible selection/projection of a source.
 
     Each source has exactly one root view (no parent, no filters, all columns), created
-    at registration. Later views (create_view) are children of an existing view.
+    at registration. Child views (create_view) store their *complete* canonical filter
+    set and are identified by `definition_sha256`, so identical definitions are reused.
+    `parent_view_id` records the base view of the call that first created the view.
     """
 
     __tablename__ = "dataset_views"
@@ -46,6 +48,13 @@ class DatasetView(Base):
             unique=True,
             sqlite_where=text("parent_view_id IS NULL"),
         ),
+        Index(
+            "uq_dataset_views_definition",
+            "source_id",
+            "definition_sha256",
+            unique=True,
+            sqlite_where=text("definition_sha256 IS NOT NULL"),
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(40), primary_key=True, default=lambda: new_id("view"))
@@ -55,6 +64,8 @@ class DatasetView(Base):
     columns_json: Mapped[list[str]] = mapped_column(JSON)
     null_policy: Mapped[str] = mapped_column(String(30))
     row_count: Mapped[int] = mapped_column(Integer)
+    # Null for root views (identified by the root index); set for every child view.
+    definition_sha256: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
 
 
@@ -146,6 +157,8 @@ class Operation(Base):
     raw_arguments: Mapped[str] = mapped_column(Text)  # exactly as the model sent them
     args_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)  # validated; null if invalid
     input_ids_json: Mapped[list[str]] = mapped_column(JSON)  # source/view IDs consumed
+    # IDs of artifacts the operation produced or resolved (e.g. a view), besides evidence.
+    output_ids_json: Mapped[list[str]] = mapped_column(JSON, server_default=text("'[]'"))
     status: Mapped[str] = mapped_column(String(20))  # succeeded | failed
     error_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     started_at: Mapped[datetime] = mapped_column(UTCDateTime)

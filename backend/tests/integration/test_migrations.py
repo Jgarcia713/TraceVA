@@ -81,3 +81,46 @@ def test_fk_violation_check_rolls_back(database_url: str) -> None:
             assert conn.execute(text("SELECT COUNT(*) FROM child")).scalar() == 0
     finally:
         engine.dispose()
+
+
+def test_table_rebuild_preserves_child_rows(alembic_config: Config, database_url: str) -> None:
+    """ADR-002 regression: the 0003 downgrade rebuilds `operations` (drop column), which
+    `evidence` references. With FKs on, the rebuild's DROP TABLE could delete or block
+    child rows; the migration procedure must keep them and leave no violations."""
+    command.upgrade(alembic_config, "head")
+    engine = create_app_engine(database_url)
+    try:
+        with engine.begin() as conn:
+            conn.exec_driver_sql(
+                "INSERT INTO conversations (id, created_at) VALUES ('c', '2026-01-01')"
+            )
+            conn.exec_driver_sql(
+                "INSERT INTO analysis_runs (id, conversation_id, status, config_json, created_at) "
+                "VALUES ('r', 'c', 'completed', '{}', '2026-01-01')"
+            )
+            conn.exec_driver_sql(
+                "INSERT INTO operations (id, run_id, sequence_no, tool_name, raw_arguments, "
+                "input_ids_json, output_ids_json, status, started_at, completed_at) VALUES "
+                "('op', 'r', 1, 'summarize', '{}', '[]', '[]', 'succeeded', "
+                "'2026-01-01', '2026-01-01')"
+            )
+            conn.exec_driver_sql(
+                "INSERT INTO evidence (id, operation_id, result_json, created_at) "
+                "VALUES ('ev', 'op', '{}', '2026-01-01')"
+            )
+    finally:
+        engine.dispose()
+
+    command.downgrade(alembic_config, "0002_runs")  # rebuilds `operations`
+
+    engine = create_app_engine(database_url)
+    try:
+        with engine.connect() as conn:
+            assert conn.exec_driver_sql("SELECT operation_id FROM evidence").scalar() == "op"
+            assert conn.exec_driver_sql("SELECT COUNT(*) FROM operations").scalar() == 1
+            assert conn.exec_driver_sql("PRAGMA foreign_key_check").fetchall() == []
+            columns = [r[1] for r in conn.exec_driver_sql("PRAGMA table_info(operations)")]
+            assert "output_ids_json" not in columns  # the rebuild really happened
+    finally:
+        engine.dispose()
+    command.upgrade(alembic_config, "head")

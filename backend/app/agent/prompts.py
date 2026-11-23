@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-PROMPT_VERSION = "m2-v1"
+PROMPT_VERSION = "m2-v2"
 
 SYSTEM_PROMPT = """\
 You are a data-analysis agent working on registered tabular datasets.
@@ -22,8 +22,12 @@ Rules:
 - Describe associations, not causes. State relevant limitations as caveats, such as
   missing values or small groups.
 - If a tool returns an error, read it, correct the arguments, and try again.
-- Available operations are limited to the provided tools. Filtering rows is not
-  supported yet; if a question needs it, say so in the explanation and caveats.
+- To restrict rows (for example age > 40, or only women), call create_view first and
+  pass the returned view_id to summarize. Never approximate a filter with group_by.
+- Rows with a missing value in a filtered column are excluded; if create_view reports
+  excluded rows, mention it as a caveat.
+- Available operations are limited to the provided tools. If a question needs
+  something they cannot do, say so in the explanation and caveats.
 - In summarize, group_by columns must not also be listed in columns.
 """
 

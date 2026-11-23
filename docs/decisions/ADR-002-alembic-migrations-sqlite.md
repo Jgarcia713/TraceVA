@@ -54,4 +54,4 @@ Use **Alembic from Milestone 0**, with:
   - DDL inside a failed transaction is rolled back
   - an orphan row inserted with FKs off is caught by `assert_no_fk_violations` and rolled back
 - `tests/integration/test_registry_and_tools.py`: the database rejects a dangling `source_id` and a second root view (passing).
-- Still pending: a regression test for the first real batch migration (expected M3) that seeds parent/child rows and asserts they survive.
+- Done (2026-11-23, `test_table_rebuild_preserves_child_rows`): the first migration that needs a real table rebuild is the downgrade of `0003_views`, which drops a column from `operations` (referenced by `evidence`). The test seeds parent and child rows, runs the downgrade, and asserts that the child rows survive, `foreign_key_check` is empty, and the column is gone. A mutation check confirmed that with FKs left on, the rebuild fails with `FOREIGN KEY constraint failed`.

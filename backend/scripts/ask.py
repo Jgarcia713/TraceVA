@@ -52,6 +52,8 @@ def main() -> int:
         for op in ops:
             ev = session.scalar(select(Evidence.id).where(Evidence.operation_id == op.id))
             outcome = f"-> {ev}" if ev else f"FAILED {short(op.error_json)}"
+            if op.output_ids_json:
+                outcome += f" (produced {', '.join(op.output_ids_json)})"
             print(f"  {op.sequence_no}. {op.tool_name}({short(op.raw_arguments, 120)}) {outcome}")
         answer = session.scalar(
             select(ChatMessage).where(ChatMessage.run_id == run.id, ChatMessage.role == "assistant")

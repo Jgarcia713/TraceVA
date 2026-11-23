@@ -2,7 +2,7 @@
 
 The design target is `docs/TRACEVA_BACKEND_CONTEXT.md`. This document describes what currently exists; decisions and their rationale are in `docs/decisions/`.
 
-**Status:** Milestones 0–2 complete (2026-11-22). The agent runs from the CLI only. Timeline events, assumptions, the provenance graph API, HTTP endpoints for asking questions, and challenge branches are not built yet.
+**Status:** Milestones 0–2 complete (2026-11-22), plus `create_view` (2026-11-23). The agent runs from the CLI only. Timeline events, assumptions, the provenance graph API, HTTP endpoints for asking questions, and challenge branches are not built yet.
 
 ## Components
 
@@ -14,7 +14,8 @@ FastAPI (app/main.py)  /api/v1/health, /api/v1/datasets[/{id}]   read-only
    │
    ├── app/api/            routes, error envelope + request IDs (errors.py)
    ├── app/analysis/
-   │     tools.py          inspect_dataset, summarize: typed in/out; resolve IDs → frames
+   │     tools.py          inspect_dataset, create_view, summarize: typed in/out; resolve IDs → frames
+   │     views.py          pure filter AST: validation, canonical definitions, application
    │     statistics.py     pure dataframe functions (no DB/files): profile, summarize
    │     registry.py       code-defined datasets + registration (source + root view)
    │     datasets.py       parser adult-v1, SHA-256 checks, path safety, frame cache
@@ -29,11 +30,11 @@ datasets/ (gitignored raw files, hash-pinned)
 | Table | Purpose | Notes |
 |---|---|---|
 | `dataset_sources` | Registered immutable file | Unique on (name, sha256, parser_version); `schema_json` holds column name/kind/dtype |
-| `dataset_views` | Reproducible selection of a source | Exactly one **root view** per source (partial unique index); child views arrive with `create_view` |
+| `dataset_views` | Reproducible selection of a source | Exactly one **root view** per source. Child views store their *complete* canonical filter set and are unique per `(source_id, definition_sha256)`, so identical definitions are reused regardless of filter order or chaining |
 | `conversations`, `chat_messages` | Dialogue | Question message carries `run_id`; one question per run (partial unique index) |
 | `analysis_runs` | One investigation | `running → completed/failed`; config snapshot (model, prompt version, tool-schema hash, budgets, dataset hashes); typed `error_json` |
 | `model_calls` | Each model request | Content, raw tool calls, usage, latency, `reasoning_chars_discarded` (reasoning text never stored) |
-| `operations` | Each tool call, including failed ones and rejected `submit_answer` attempts | Written once; raw arguments as sent, validated args or null, consumed IDs, error |
+| `operations` | Each tool call, including failed ones and rejected `submit_answer` attempts | Written once; raw arguments as sent, validated args or null, consumed IDs (`input_ids_json`), produced or resolved IDs such as views (`output_ids_json`), error |
 | `evidence` | Result of a successful operation | One per successful operation; immutable |
 | `claims`, `claim_evidence` | Model claims and their citations | Citations `agent_proposed`; must reference evidence from the same run (checked on the server) |
 
@@ -52,6 +53,12 @@ IDs are type-prefixed UUIDs (`src_…`, `view_…`). Timestamps are timezone-awa
   - A column in both `columns` and `group_by` is **rejected, not silently corrected** (decided 2026-11-22). Normalizing model arguments would make the recorded operation differ from what the model actually requested. Prevention is handled in the field descriptions, which the model sees as JSON Schema. In a pre-M2 test with qwen3.5:4b, the model made this mistake before the descriptions were improved and repaired it in one round after receiving the error; with the improved descriptions it called correctly on the first try (one question, temperature 0).
   - Groups are ordered by size descending, then key. Truncation at `MAX_TOOL_RESULT_ROWS` keeps the largest groups and reports `total_groups` and `truncated`. Categories beyond the cap are reported as `other_count`.
   - An empty view returns an explicit empty result with a warning rather than an error.
+- `create_view(view_id, filters)`:
+  - Filters are `{column, op, value}`, combined with AND. Operators: `eq ne lt le gt ge in not_in is_missing not_missing`. Order operators require numeric columns.
+  - Values use strict types: `true` is rejected, not coerced to 1. Category values must match exactly; unknown values fail with `UNKNOWN_VALUE` and spelling suggestions.
+  - A missing value never matches a comparison (including `ne` and `not_in`). Rows excluded for that reason are reported per filter (`rows_excluded_missing`).
+  - Returns `view_id`, `reused`, base and new row counts, the complete canonical filters, and warnings (empty view, or fewer than 30 rows).
+  - The tool never writes. It returns a view draft that the orchestrator persists in the same transaction as the Operation; direct callers use `persist_views`.
 
 ## Deliberate boundaries
 

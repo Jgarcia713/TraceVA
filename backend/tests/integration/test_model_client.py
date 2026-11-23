@@ -72,6 +72,7 @@ def test_request_shape_and_reasoning_discarded(settings: Settings) -> None:
     assert body["seed"] == 7
     assert [t["function"]["name"] for t in body["tools"]] == [
         "inspect_dataset",
+        "create_view",
         "summarize",
         "submit_answer",
     ]

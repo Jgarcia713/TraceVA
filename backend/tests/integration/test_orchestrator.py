@@ -28,6 +28,7 @@ from app.db.models import (
     ChatMessage,
     Claim,
     ClaimEvidence,
+    DatasetView,
     Evidence,
     ModelCall,
     Operation,
@@ -562,3 +563,72 @@ def test_context_guard_catches_growth_between_steps(
     assert len(llm.requests) == 1  # second call was not sent
     with session_factory() as db:  # the evidence computed before the limit is kept
         assert [o.status for o in ops(db, result.run_id)] == ["succeeded"]
+
+
+# --- create_view through the agent ------------------------------------------------------
+
+
+def test_filter_then_summarize_records_view_lineage(
+    session_factory: sessionmaker[Session], agent_settings: Settings, sample_ids: dict[str, str]
+) -> None:
+    def summarize_new_view(messages: Messages) -> ModelResponse:
+        view_id = tool_payloads(messages)[-1]["result"]["view_id"]
+        return calls(
+            tool_call(
+                "summarize",
+                {"view_id": view_id, "columns": ["hours_per_week"], "metrics": ["mean"]},
+            )
+        )
+
+    agent, llm = make_agent(
+        session_factory,
+        agent_settings,
+        [
+            calls(
+                tool_call(
+                    "create_view",
+                    {
+                        "view_id": sample_ids["view_id"],
+                        "filters": [{"column": "age", "op": "gt", "value": 40}],
+                    },
+                )
+            ),
+            summarize_new_view,
+            submit_citing_all("Older people work about N hours."),
+        ],
+    )
+    result = agent.ask("Average hours for people over 40?")
+    assert result.status == RunStatus.COMPLETED
+
+    with session_factory() as db:
+        create_op, summarize_op = ops(db, result.run_id)
+        (view_id,) = create_op.output_ids_json
+        assert create_op.input_ids_json == [sample_ids["view_id"]]
+        assert summarize_op.input_ids_json == [view_id]  # lineage: root -> view -> summary
+        assert summarize_op.output_ids_json == []
+        view = db.get(DatasetView, view_id)
+        assert view is not None and view.parent_view_id == sample_ids["view_id"]
+
+
+def test_failed_create_view_writes_no_view(
+    session_factory: sessionmaker[Session], agent_settings: Settings, sample_ids: dict[str, str]
+) -> None:
+    bad = tool_call(
+        "create_view",
+        {
+            "view_id": sample_ids["view_id"],
+            "filters": [{"column": "sex", "op": "eq", "value": "female"}],
+        },
+    )
+    agent, llm = make_agent(
+        session_factory,
+        agent_settings,
+        [calls(bad), calls(tool_call("submit_answer", {"explanation": "x"}))],
+    )
+    agent.ask("Women only")
+    error = tool_payloads(llm.requests[1])[0]["error"]
+    assert error["code"] == "UNKNOWN_VALUE"
+    assert error["details"]["suggestions"]["female"][0] == "Female"
+    with session_factory() as db:
+        views = db.scalars(select(DatasetView)).all()
+    assert len(views) == 1  # only the root view

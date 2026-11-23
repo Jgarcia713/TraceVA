@@ -38,7 +38,7 @@ from app.agent.tool_registry import (
     tool_schema_hash,
 )
 from app.analysis.registry import root_view_id
-from app.analysis.tools import ToolContext
+from app.analysis.tools import ToolContext, persist_views
 from app.config import Settings
 from app.db.base import utcnow
 from app.db.models import (
@@ -383,6 +383,8 @@ class AgentOrchestrator:
             outcome = execute(ctx, call.name, call.arguments)
             completed_at = utcnow()
         with self._sessions.begin() as session:
+            if outcome.ok:
+                persist_views(session, outcome.new_views)  # same transaction as the Operation
             operation = self._operation(
                 session, run_id, model_call_id, call, outcome, started_at, completed_at
             )
@@ -431,6 +433,7 @@ class AgentOrchestrator:
             raw_arguments=call.arguments,
             args_json=outcome.args,
             input_ids_json=outcome.input_ids,
+            output_ids_json=outcome.output_ids,
             status="succeeded" if outcome.ok else "failed",
             error_json=outcome.error,
             started_at=started_at,

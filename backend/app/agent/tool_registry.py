@@ -11,14 +11,22 @@ import hashlib
 import json
 import logging
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from pydantic import BaseModel, ValidationError
 
-from app.analysis.tools import ToolContext, inspect_dataset, summarize
+from app.analysis.tools import (
+    ToolContext,
+    ToolResult,
+    ViewDraft,
+    create_view,
+    inspect_dataset,
+    summarize,
+)
 from app.schemas.agent import SubmitAnswerInput
 from app.schemas.tools import (
+    CreateViewInput,
     InspectDatasetInput,
     SummarizeInput,
     ToolError,
@@ -35,7 +43,7 @@ class ToolSpec:
     name: str
     description: str
     input_model: type[BaseModel]
-    run: Callable[[ToolContext, Any], BaseModel]
+    run: Callable[[ToolContext, Any], BaseModel | ToolResult]
     input_ids: Callable[[Any], list[str]]
 
 
@@ -51,6 +59,17 @@ TOOLS: dict[str, ToolSpec] = {
             input_model=InspectDatasetInput,
             run=inspect_dataset,
             input_ids=lambda a: [a.source_id],
+        ),
+        ToolSpec(
+            name="create_view",
+            description=(
+                "Create a filtered view of rows (e.g. age > 40, sex = Female) and return its "
+                "view_id, row count, and rows excluded because of missing values. Use the "
+                "returned view_id in summarize. Identical filters return the same view."
+            ),
+            input_model=CreateViewInput,
+            run=create_view,
+            input_ids=lambda a: [a.view_id],
         ),
         ToolSpec(
             name="summarize",
@@ -114,6 +133,8 @@ class ToolOutcome:
     # not requested) but keeps explicit nulls, such as a missing-value group key or an
     # undefined std, which carry meaning.
     model_view: dict[str, Any] | None = None
+    new_views: list[ViewDraft] = field(default_factory=list)  # to persist with the Operation
+    output_ids: list[str] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -164,7 +185,7 @@ def execute(ctx: ToolContext, name: str, raw_arguments: str) -> ToolOutcome:
     args_json = args.model_dump(mode="json")
     input_ids = spec.input_ids(args)
     try:
-        result = spec.run(ctx, args)
+        raw = spec.run(ctx, args)
     except ToolError as exc:
         return _failure(exc.code, exc.message, exc.details, args=args_json, input_ids=input_ids)
     except Exception:  # a bug in a tool must not crash the run or vanish silently
@@ -175,10 +196,13 @@ def execute(ctx: ToolContext, name: str, raw_arguments: str) -> ToolOutcome:
             args=args_json,
             input_ids=input_ids,
         )
+    result = raw.output if isinstance(raw, ToolResult) else raw
     return ToolOutcome(
         args=args_json,
         input_ids=input_ids,
         result=result.model_dump(mode="json"),
         error=None,
         model_view=result.model_dump(mode="json", exclude_unset=True),
+        new_views=raw.new_views if isinstance(raw, ToolResult) else [],
+        output_ids=raw.output_ids if isinstance(raw, ToolResult) else [],
     )

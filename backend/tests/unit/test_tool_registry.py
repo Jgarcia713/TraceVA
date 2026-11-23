@@ -18,7 +18,7 @@ def ctx() -> ToolContext:
 def test_schemas_expose_tools_and_submit_answer() -> None:
     schemas = model_tool_schemas()
     names = [s["function"]["name"] for s in schemas]
-    assert names == ["inspect_dataset", "summarize", "submit_answer"]
+    assert names == ["inspect_dataset", "create_view", "summarize", "submit_answer"]
     for schema in schemas:
         params = schema["function"]["parameters"]
         assert params["type"] == "object"
