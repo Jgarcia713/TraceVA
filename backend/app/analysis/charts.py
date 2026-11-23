@@ -219,5 +219,13 @@ def claim_charts(cited: list[tuple[ChartSpec, str]]) -> list[ChartSpec]:
                 notes=["Merged from several cited evidence records (one bar each)."],
             )
         )
-    rest = [spec for spec, _ in cited if spec.evidence_id not in merged_ids]
+    rest = []
+    for spec, label in cited:
+        if spec.evidence_id in merged_ids:
+            continue
+        if len(spec.series) == 1 and spec.series[0].x == ["all rows"]:
+            # An ungrouped summary of a filtered view: name the bar after the view.
+            series = spec.series[0].model_copy(update={"x": [label]})
+            spec = spec.model_copy(update={"series": [series], "x_label": "view"})
+        rest.append(spec)
     return merged + rest

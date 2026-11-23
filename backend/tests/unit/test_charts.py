@@ -121,4 +121,5 @@ def test_claim_charts_merge_single_value_comparisons() -> None:
     assert merged.series[0].x == ["sex = Male", "sex = Female"]
     assert merged.series[0].y == [pytest.approx(42.4), pytest.approx(36.4)]
     assert merged.evidence_id == "ev_m,ev_w"
-    assert claim_charts([(men, "sex = Male")]) == [men]  # a single chart is kept as is
+    (single,) = claim_charts([(men, "sex = Male")])  # a single bar is named after its view
+    assert single.series[0].x == ["sex = Male"] and single.series[0].y == men.series[0].y

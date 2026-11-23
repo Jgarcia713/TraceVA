@@ -107,11 +107,13 @@ IDs are type-prefixed UUIDs (`src_…`, `view_…`). Timestamps are timezone-awa
 
 **Done:** M0–M3 (`main`), plus `create_view`. 178 tests; real-model runs are documented in `docs/implementation/`. The second code review of M3 led to 10 fixes (see `docs/implementation/m3b-http-api.md`).
 
-**In progress:** the interim-presentation prototype:
-- a React frontend
-- a demo replay mode (recorded real model responses, with all computation live)
-- backend chart specs derived from evidence
-- `docs/reports/interim-metrics.md`
+**Interim-presentation prototype (done):**
+- React frontend (`frontend/`)
+- replay demo mode (`LLM_PROVIDER=replay`)
+- backend chart specs derived from evidence (`/evidence/{id}/chart`, `/claims/{id}/charts`)
+- metrics: `docs/reports/interim-metrics.md`
+
+See `docs/implementation/demo-prototype.md`.
 
 **Next milestones:**
 1. **M4, challenge branches:** a user challenge on a claim creates a child run (`parent_run_id`) whose citation scope includes the parent's evidence. Revised claims link to the claims they revise, and a compare endpoint reports changed methods and results. Backend method caveats are natural challenge targets.

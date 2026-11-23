@@ -96,3 +96,13 @@ curl http://127.0.0.1:8000/api/v1/runs/<run_id>/graph
 ```
 
 Interactive docs: http://127.0.0.1:8000/docs
+
+## Demo mode and reports
+
+```powershell
+..\scripts\start-demo.ps1                      # replay backend + frontend, separate demo.db
+python scripts/export_demo.py run_... run_...  # rebuild demo/catalog.json from real runs
+python scripts/report_runs.py --csv runs.csv   # per-run metrics from the provenance DB
+```
+
+`LLM_PROVIDER=replay` replays recorded model responses; tools, evidence, and provenance are computed live. Questions outside the catalog are rejected (422). Details: `../docs/implementation/demo-prototype.md`.
