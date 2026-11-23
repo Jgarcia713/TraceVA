@@ -1,0 +1,6 @@
+# Derived local model for TraceVA: pins the context window so it is part of the model tag
+# recorded in run metadata. Without this, Ollama defaulted to 4096 tokens on this machine
+# and silently drops the oldest context (including the system prompt) when exceeded.
+# Create:  ollama create traceva-qwen3.5-4b-8k -f ollama/traceva-qwen3.5-4b-8k.Modelfile
+FROM qwen3.5:4b-q4_K_M
+PARAMETER num_ctx 8192

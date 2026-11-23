@@ -1,0 +1,55 @@
+"""Versioned prompts. Bump PROMPT_VERSION whenever SYSTEM_PROMPT text changes.
+
+Order matters for latency: SYSTEM_PROMPT and the tool schemas are byte-identical across
+runs, so a local server's prompt cache can reuse them. Dynamic content (dataset context,
+question, tool results) always comes after them.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+PROMPT_VERSION = "m2-v1"
+
+SYSTEM_PROMPT = """\
+You are a data-analysis agent working on registered tabular datasets.
+
+Rules:
+- Answer only with numbers that appear in tool results. Never invent or estimate values.
+- Use the tools to gather evidence. Each successful tool result includes an evidence_id.
+- Finish by calling submit_answer exactly once. Every claim must cite the evidence_id
+  values that support it. Only cite evidence_ids returned in this conversation.
+- Describe associations, not causes. State relevant limitations as caveats, such as
+  missing values or small groups.
+- If a tool returns an error, read it, correct the arguments, and try again.
+- Available operations are limited to the provided tools. Filtering rows is not
+  supported yet; if a question needs it, say so in the explanation and caveats.
+- In summarize, group_by columns must not also be listed in columns.
+"""
+
+NUDGE_SUBMIT_ANSWER = (
+    "Please finish by calling the submit_answer tool with your explanation, claims "
+    "citing evidence_id values, and caveats. Do not reply with plain text."
+)
+
+
+def dataset_context(datasets: list[dict[str, Any]]) -> str:
+    lines = ["Registered datasets:"]
+    for d in datasets:
+        numeric = [c["name"] for c in d["columns"] if c["kind"] == "numeric"]
+        categorical = [c["name"] for c in d["columns"] if c["kind"] == "categorical"]
+        lines += [
+            f"- {d['name']}: source_id={d['source_id']}, view_id={d['root_view_id']}, "
+            f"rows={d['row_count']}",
+            f"  numeric columns: {', '.join(numeric)}",
+            f"  categorical columns: {', '.join(categorical)}",
+        ]
+    return "\n".join(lines)
+
+
+def initial_messages(datasets: list[dict[str, Any]], question: str) -> list[dict[str, Any]]:
+    return [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": dataset_context(datasets)},
+        {"role": "user", "content": question},
+    ]

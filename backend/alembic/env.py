@@ -9,12 +9,13 @@ Procedure (mirrors sqlite.org "Making Other Kinds Of Table Schema Changes"):
 from __future__ import annotations
 
 from logging.config import fileConfig
+from typing import Any
 
 from alembic import context
 
 import app.db.models  # noqa: F401  (registers tables on Base.metadata)
 from app.config import get_settings
-from app.db.base import Base
+from app.db.base import Base, UTCDateTime
 from app.db.session import assert_no_fk_violations, create_migration_engine
 
 config = context.config
@@ -22,6 +23,14 @@ if config.config_file_name is not None and config.attributes.get("configure_logg
     fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = Base.metadata
+
+
+def _render_item(type_: str, obj: Any, autogen_context: Any) -> str | bool:
+    """Render app column types as plain SQLAlchemy types so that migrations never
+    import app code (they must stay valid as the app evolves)."""
+    if type_ == "type" and isinstance(obj, UTCDateTime):
+        return "sa.DateTime()"
+    return False
 
 
 def _database_url() -> str:
@@ -34,6 +43,7 @@ def run_migrations_offline() -> None:
         target_metadata=target_metadata,
         literal_binds=True,
         render_as_batch=True,
+        render_item=_render_item,
     )
     with context.begin_transaction():
         context.run_migrations()
@@ -47,6 +57,7 @@ def run_migrations_online() -> None:
                 connection=connection,
                 target_metadata=target_metadata,
                 render_as_batch=True,
+                render_item=_render_item,
                 transaction_per_migration=False,
             )
             with context.begin_transaction():

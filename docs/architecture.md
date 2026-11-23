@@ -2,11 +2,14 @@
 
 The design target is `TRACEVA_BACKEND_CONTEXT.md`. This document describes what currently exists; decisions and their rationale are in `docs/decisions/`.
 
-**Status:** Milestones 0–1 complete (2026-11-22). There is no LLM, provenance recording, or agent orchestration yet.
+**Status:** Milestones 0–2 complete (2026-11-22). The agent runs from the CLI only. Timeline events, assumptions, the provenance graph API, HTTP endpoints for asking questions, and challenge branches are not built yet.
 
 ## Components
 
 ```text
+scripts/ask.py ──► app/agent/orchestrator.py ──► LLMClient (OpenAI SDK → Ollama /v1)
+                         │   prompts.py, tool_registry.py (schemas, hash, execute)
+                         ▼
 FastAPI (app/main.py)  /api/v1/health, /api/v1/datasets[/{id}]   read-only
    │
    ├── app/api/            routes, error envelope + request IDs (errors.py)
@@ -27,6 +30,12 @@ datasets/ (gitignored raw files, hash-pinned)
 |---|---|---|
 | `dataset_sources` | Registered immutable file | Unique on (name, sha256, parser_version); `schema_json` holds column name/kind/dtype |
 | `dataset_views` | Reproducible selection of a source | Exactly one **root view** per source (partial unique index); child views arrive with `create_view` |
+| `conversations`, `chat_messages` | Dialogue | Question message carries `run_id`; one question per run (partial unique index) |
+| `analysis_runs` | One investigation | `running → completed/failed`; config snapshot (model, prompt version, tool-schema hash, budgets, dataset hashes); typed `error_json` |
+| `model_calls` | Each model request | Content, raw tool calls, usage, latency, `reasoning_chars_discarded` (reasoning text never stored) |
+| `operations` | Each tool call, including failed ones | Written once; raw arguments as sent, validated args or null, consumed IDs, error |
+| `evidence` | Result of a successful operation | One per successful operation; immutable |
+| `claims`, `claim_evidence` | Model claims and their citations | Citations `agent_proposed`; must reference evidence from the same run (checked on the server) |
 
 IDs are type-prefixed UUIDs (`src_…`, `view_…`). Timestamps are timezone-aware UTC (`UTCDateTime` rejects naive values). There are no cascade deletes.
 
@@ -46,7 +55,8 @@ IDs are type-prefixed UUIDs (`src_…`, `view_…`). Timestamps are timezone-awa
 
 ## Deliberate boundaries
 
-- **No HTTP endpoint executes tools.** Executing tools without recording `Operation`/`Evidence` would create an untracked analysis path. Tools are callable from tests and scripts until provenance recording lands (M2/M3).
+- **No HTTP endpoint executes tools.** Tools run either directly (tests and scripts, unrecorded) or through the orchestrator (recorded). HTTP endpoints for asking questions arrive in M3.
+- **The agent's explanation text is not verified.** Only claims carry citations. See `docs/implementation/m2-agent-vertical-slice.md`.
 - `statistics.py` is pure, so correctness tests use hand-built frames with hand-computed values. Integration tests compare tool output against a stdlib-only reading of the raw fixture (`tests/reference.py`), not pandas against pandas.
 - Only root views are supported; any other view raises `UNSUPPORTED_VIEW` rather than being misapplied.
 

@@ -7,7 +7,7 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from fastapi.testclient import TestClient
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.analysis.datasets import clear_cache
 from app.config import BACKEND_DIR, Settings
@@ -61,3 +61,22 @@ def session(migrated_db: str) -> Iterator[Session]:
             yield db_session
     finally:
         engine.dispose()
+
+
+@pytest.fixture
+def session_factory(migrated_db: str) -> Iterator[sessionmaker[Session]]:
+    engine = create_app_engine(migrated_db)
+    try:
+        yield create_session_factory(engine)
+    finally:
+        engine.dispose()
+
+
+@pytest.fixture
+def sample_ids(session_factory: sessionmaker[Session]) -> dict[str, str]:
+    """Register the 50-row Adult fixture; return its source and root view IDs."""
+    from app.analysis.registry import register_dataset, root_view_id
+
+    with session_factory.begin() as db:
+        source = register_dataset(db, "adult_sample", FIXTURES_DIR)
+        return {"source_id": source.id, "view_id": root_view_id(db, source.id)}

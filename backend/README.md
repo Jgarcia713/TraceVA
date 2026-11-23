@@ -72,3 +72,13 @@ python scripts/model_smoke.py --model qwen3.5:4b-q4_K_M --mode openai
 ```
 
 Reports tool-call validity, reasoning leakage, and latency. See `../docs/implementation/pre-m2-model-smoke-test.md` for results and limitations.
+
+## Agent (Milestone 2)
+
+```powershell
+ollama create traceva-qwen3.5-4b-8k -f ollama/traceva-qwen3.5-4b-8k.Modelfile   # once
+python scripts/ask.py "How do average weekly working hours differ between men and women?"
+python scripts/ask.py --show-evidence --conversation conv_... "Follow-up question"
+```
+
+Each run records its operations, evidence, claims, and model calls in SQLite. Expect 1.5–7 minutes per question on a laptop CPU. Tests use a scripted fake model and need no Ollama.

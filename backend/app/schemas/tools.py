@@ -33,6 +33,12 @@ class ToolErrorCode(StrEnum):
     INVALID_ARGUMENTS = "INVALID_ARGUMENTS"
     UNSUPPORTED_VIEW = "UNSUPPORTED_VIEW"
     DATASET_INTEGRITY = "DATASET_INTEGRITY"
+    # Raised by the agent tool registry / orchestrator rather than by tools themselves
+    UNKNOWN_TOOL = "UNKNOWN_TOOL"
+    INVALID_JSON = "INVALID_JSON"
+    TOO_MANY_TOOL_CALLS = "TOO_MANY_TOOL_CALLS"
+    INVALID_CITATIONS = "INVALID_CITATIONS"
+    INTERNAL_ERROR = "INTERNAL_ERROR"
 
 
 class ToolError(Exception):
