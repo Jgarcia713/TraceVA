@@ -42,3 +42,19 @@ alembic check                                           # fails if models and mi
 ```
 
 Migrations run with foreign keys off inside one transaction and are rolled back if `PRAGMA foreign_key_check` finds violations. Never backfill provenance values (e.g. `origin`) that were not actually observed.
+
+## Datasets and tools (Milestone 1)
+
+```powershell
+python scripts/register_datasets.py adult   # verifies SHA-256, creates source + root view
+curl http://127.0.0.1:8000/api/v1/datasets
+```
+
+Raw files must be placed under `../datasets/` first (see `../datasets/README.md`). Analytical tools are plain Python functions (`app/analysis/tools.py`) and are not yet exposed over HTTP:
+
+```python
+from app.analysis.tools import ToolContext, summarize
+from app.schemas.tools import SummarizeInput
+out = summarize(ctx, SummarizeInput(view_id=..., columns=["hours_per_week"],
+                                    group_by=["sex"], metrics=["mean", "median"]))
+```

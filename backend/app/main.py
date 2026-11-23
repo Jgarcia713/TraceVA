@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from app.api import health
+from app.api import datasets, health
 from app.api.errors import install_error_handling
 from app.config import Settings, get_settings
 from app.db.session import create_app_engine, create_session_factory
@@ -35,4 +35,5 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     install_error_handling(app)
     app.include_router(health.router, prefix=API_PREFIX)
+    app.include_router(datasets.router, prefix=API_PREFIX)
     return app

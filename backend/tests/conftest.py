@@ -7,11 +7,20 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from fastapi.testclient import TestClient
+from sqlalchemy.orm import Session
 
+from app.analysis.datasets import clear_cache
 from app.config import BACKEND_DIR, Settings
+from app.db.session import create_app_engine, create_session_factory
 from app.main import create_app
+from tests.reference import FIXTURES_DIR
 
-FIXTURES_DIR = Path(__file__).parent / "fixtures"
+
+@pytest.fixture(autouse=True)
+def _fresh_dataframe_cache() -> Iterator[None]:
+    clear_cache()
+    yield
+    clear_cache()
 
 
 @pytest.fixture
@@ -42,3 +51,13 @@ def settings(database_url: str) -> Settings:
 def client(settings: Settings, migrated_db: str) -> Iterator[TestClient]:
     with TestClient(create_app(settings)) as test_client:
         yield test_client
+
+
+@pytest.fixture
+def session(migrated_db: str) -> Iterator[Session]:
+    engine = create_app_engine(migrated_db)
+    try:
+        with create_session_factory(engine)() as db_session:
+            yield db_session
+    finally:
+        engine.dispose()

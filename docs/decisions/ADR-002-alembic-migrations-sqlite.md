@@ -40,7 +40,18 @@ Use **Alembic from Milestone 0**, with:
 - Data migrations that touch historical provenance require explicit justification in the migration docstring.
 - Tests should build schema via `alembic upgrade head` (not `create_all`), so the migration path itself is exercised.
 
-## Verification (planned)
-- M0: test `upgrade head → downgrade base → upgrade head` on a temporary database; CI/local check runs `alembic check` (Alembic ≥ 1.9) to detect model/migration drift.
-- M0: test that app-engine connections report `PRAGMA foreign_keys = 1`.
-- First real batch migration (expected M3): regression test that seeds parent/child rows, runs the migration, and asserts child rows survive and `foreign_key_check` is empty.
+## Implementation notes (as built, 2026-11-22)
+- **pysqlite does not make DDL transactional by default.** In its legacy transaction mode, the stdlib `sqlite3` driver emits no `BEGIN` before DDL, so `CREATE`/`DROP` autocommit statement by statement, and rolling back after a failed `foreign_key_check` would not undo them. We verified this empirically: with a plain engine, a table created inside a rolled-back transaction survived. Both engines (`backend/app/db/session.py`) therefore set `isolation_level = None` on the DBAPI connection and emit `BEGIN` from SQLAlchemy's `begin` event, following the SQLite dialect documentation's recipe. Without this, piece 3 of the decision would silently not hold.
+- `PRAGMA foreign_keys` is set in the same `connect` listener, before any `BEGIN`, so it takes effect: ON for the app engine, OFF for the migration engine.
+- Revisions: `0000_baseline` (empty; establishes version tracking) and `0001_datasets`. Autogenerate output referenced `app.db.base.UTCDateTime` without importing it. The migration was rewritten to use plain `sa.DateTime()`, and migrations do not import app types.
+- `dataset_views` has a partial unique index (`source_id WHERE parent_view_id IS NULL`), so each source has exactly one root view, enforced by the database.
+
+## Verification
+- `tests/integration/test_migrations.py` (passing):
+  - `upgrade head → downgrade base → upgrade head` round trip
+  - `alembic check` reports no drift between models and migrations
+  - the app engine reports `foreign_keys = 1` and the migration engine reports `0`
+  - DDL inside a failed transaction is rolled back
+  - an orphan row inserted with FKs off is caught by `assert_no_fk_violations` and rolled back
+- `tests/integration/test_registry_and_tools.py`: the database rejects a dangling `source_id` and a second root view (passing).
+- Still pending: a regression test for the first real batch migration (expected M3) that seeds parent/child rows and asserts they survive.
