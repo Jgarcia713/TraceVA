@@ -35,6 +35,7 @@ class DatasetSpec:
     parser_version: str
     parser: Parser
     description: str
+    test_fixture: bool = False  # lives in tests/fixtures, not DATA_DIR
 
 
 DATASETS: dict[str, DatasetSpec] = {
@@ -55,9 +56,16 @@ DATASETS: dict[str, DatasetSpec] = {
             parser_version=ADULT_PARSER_VERSION,
             parser=parse_adult,
             description="50-row test fixture from adult.data (lives in tests/fixtures).",
+            test_fixture=True,
         ),
     ]
 }
+
+
+def registrable_datasets() -> list[str]:
+    """Datasets expected under DATA_DIR (excludes test fixtures)."""
+    return sorted(name for name, spec in DATASETS.items() if not spec.test_fixture)
+
 
 PARSERS: dict[str, Parser] = {ADULT_PARSER_VERSION: parse_adult}
 

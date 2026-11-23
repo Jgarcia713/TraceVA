@@ -1,8 +1,8 @@
 """Analytical tools: typed input -> typed output, resolving registered IDs to data.
 
 These are plain functions, callable from tests and benchmark scripts without an LLM.
-They do NOT record provenance (Operation/Evidence) yet; that arrives in Milestone 3,
-which is also why no HTTP endpoint executes them.
+Called directly they record nothing; the agent orchestrator (app/agent) wraps every
+model-initiated call in an Operation and stores successful results as Evidence.
 """
 
 from __future__ import annotations

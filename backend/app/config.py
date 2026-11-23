@@ -13,7 +13,9 @@ REPO_DIR = BACKEND_DIR.parent
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=BACKEND_DIR / ".env", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=BACKEND_DIR / ".env", extra="ignore", env_parse_none_str="none"
+    )
 
     database_url: str = f"sqlite:///{(BACKEND_DIR / 'traceva.db').as_posix()}"
     data_dir: Path = REPO_DIR / "datasets"

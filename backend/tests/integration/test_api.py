@@ -56,3 +56,22 @@ def test_unknown_dataset_returns_404_envelope(client: TestClient) -> None:
     response = client.get("/api/v1/datasets/src_nope")
     assert response.status_code == 404
     assert response.json()["error"]["code"] == "UNKNOWN_SOURCE"
+
+
+def test_validation_errors_from_custom_validators_are_json_safe(settings: Settings) -> None:
+    """Pydantic puts exception objects in error ctx; the envelope must still serialize."""
+    from app.schemas.tools import SummarizeInput
+
+    app = create_app(settings)
+
+    @app.post("/probe")
+    def probe(body: SummarizeInput) -> dict[str, str]:
+        return {"ok": "yes"}
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/probe",
+            json={"view_id": "v", "columns": ["a"], "group_by": ["a"], "metrics": ["mean"]},
+        )
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "VALIDATION_ERROR"

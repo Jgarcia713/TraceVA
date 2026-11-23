@@ -1,6 +1,6 @@
 # Architecture Decision Records
 
-Significant design decisions, with alternatives and rationale. The design brief is `TRACEVA_BACKEND_CONTEXT.md`; ADRs record where it was clarified or refined.
+Significant design decisions, with alternatives and rationale. The design brief is `docs/TRACEVA_BACKEND_CONTEXT.md`; ADRs record where it was clarified or refined.
 
 | ADR | Title | Status |
 |---|---|---|

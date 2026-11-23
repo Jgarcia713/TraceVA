@@ -175,3 +175,26 @@ def test_reasoning_never_persisted_end_to_end(
             text("SELECT SUM(reasoning_chars_discarded) FROM model_calls")
         ).scalar()
     assert discarded == 2 * len(SECRET_REASONING)
+
+
+def test_nameless_tool_call_becomes_repairable(settings: Settings) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        msg = {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {"id": "call_1", "type": "function", "function": {"name": None, "arguments": "{}"}}
+            ],
+        }
+        return httpx.Response(200, json=completion(msg))
+
+    (call,) = client_for(settings, handler).complete([], []).tool_calls
+    assert call.name == ""  # the registry answers UNKNOWN_TOOL; nothing crashes
+
+
+def test_per_call_timeout_is_capped(settings: Settings) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=completion({"role": "assistant", "content": "x"}, "stop"))
+
+    llm = client_for(settings, handler)
+    assert llm.complete([], [], timeout_s=5.0).content == "x"

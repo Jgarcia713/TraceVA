@@ -2,7 +2,6 @@
 
 Usage (from backend/, with Ollama running and 'adult' registered):
     python scripts/ask.py "How do average weekly hours differ between men and women?"
-    python scripts/ask.py --conversation conv_... "Follow-up question"
 """
 
 from __future__ import annotations
@@ -28,7 +27,6 @@ def short(value: object, limit: int = 160) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Ask the TraceVA agent one question")
     parser.add_argument("question")
-    parser.add_argument("--conversation", default=None)
     parser.add_argument("--show-evidence", action="store_true", help="print full cited evidence")
     args = parser.parse_args()
 
@@ -38,7 +36,7 @@ def main() -> int:
     llm = OpenAICompatClient(settings)
     print(f"model={settings.llm_model} thinking={settings.llm_thinking} ...", flush=True)
 
-    result = AgentOrchestrator(sessions, llm, settings).ask(args.question, args.conversation)
+    result = AgentOrchestrator(sessions, llm, settings).ask(args.question)
 
     with sessions() as session:
         run = session.get(AnalysisRun, result.run_id)

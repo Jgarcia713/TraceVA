@@ -25,3 +25,11 @@ The citation check, immutable operation records, and loud failures are the proje
 ## Verification
 - 96 tests passing (no model access). Mutation checks confirmed that tests fail when (a) citation validation is removed, (b) a write transaction is held across a model call, and (c) reasoning text leaks into stored content.
 - Manual evaluation with qwen3.5:4b on the full Adult data: `docs/implementation/m2-agent-vertical-slice.md`.
+
+## Implementation notes (post-review, 2026-11-23)
+A code review of the M0–M2 branch led to these changes:
+- **Model view of tool results.** The compact view now omits only fields a tool never set (`model_dump(exclude_unset=True)`) and keeps explicit nulls. Previously, stripping every null erased the missing-value group's key (`{"workclass": null}` became `{}`) and hid undefined statistics. None of the five M2 evaluation runs grouped by a column with missing values, so those results are unaffected. A regression test covers this, and a mutation check confirmed it fails under the old behavior.
+- **Rejected `submit_answer` attempts** (invalid JSON or arguments, or invalid citations) are now recorded as failed operations and counted in `failed_operations`, consistent with "every tool call is recorded".
+- **Time budget.** Each model call's timeout is capped at the run's remaining budget, and a response that arrives after the deadline is recorded but not acted on (`BUDGET_EXHAUSTED`).
+- **Transaction scope.** Tools now compute in a read session that is closed before a short write transaction records the operation and evidence. SQLite WAL mode is the further step if concurrent HTTP runs (M3) contend.
+- **Conversations.** A run's model context contains only its own question. The `--conversation` CLI flag was removed until M3 decides how earlier turns enter the context.

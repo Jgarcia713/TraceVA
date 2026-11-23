@@ -11,14 +11,14 @@ import argparse
 import sys
 
 from app.analysis.datasets import DatasetIntegrityError
-from app.analysis.registry import DATASETS, register_dataset, root_view_id
+from app.analysis.registry import register_dataset, registrable_datasets, root_view_id
 from app.config import get_settings
 from app.db.session import create_app_engine, create_session_factory
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("names", nargs="*", default=["adult"], choices=sorted(DATASETS))
+    parser.add_argument("names", nargs="*", default=["adult"], choices=registrable_datasets())
     args = parser.parse_args()
 
     settings = get_settings()

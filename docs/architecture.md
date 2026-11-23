@@ -1,6 +1,6 @@
 # TraceVA architecture (as built)
 
-The design target is `TRACEVA_BACKEND_CONTEXT.md`. This document describes what currently exists; decisions and their rationale are in `docs/decisions/`.
+The design target is `docs/TRACEVA_BACKEND_CONTEXT.md`. This document describes what currently exists; decisions and their rationale are in `docs/decisions/`.
 
 **Status:** Milestones 0–2 complete (2026-11-22). The agent runs from the CLI only. Timeline events, assumptions, the provenance graph API, HTTP endpoints for asking questions, and challenge branches are not built yet.
 
@@ -18,9 +18,9 @@ FastAPI (app/main.py)  /api/v1/health, /api/v1/datasets[/{id}]   read-only
    │     statistics.py     pure dataframe functions (no DB/files): profile, summarize
    │     registry.py       code-defined datasets + registration (source + root view)
    │     datasets.py       parser adult-v1, SHA-256 checks, path safety, frame cache
-   ├── app/schemas/        Pydantic contracts: tools.py (future LLM-facing), api.py
+   ├── app/schemas/        Pydantic contracts: tools.py (LLM-facing tool inputs), agent.py, api.py
    └── app/db/             models, UTC datetime type, engines (FK + transaction handling)
-SQLite (Alembic-managed) ← dataset_sources, dataset_views
+SQLite (Alembic-managed) ← datasets, conversations, runs, model calls, operations, evidence, claims
 datasets/ (gitignored raw files, hash-pinned)
 ```
 
@@ -33,7 +33,7 @@ datasets/ (gitignored raw files, hash-pinned)
 | `conversations`, `chat_messages` | Dialogue | Question message carries `run_id`; one question per run (partial unique index) |
 | `analysis_runs` | One investigation | `running → completed/failed`; config snapshot (model, prompt version, tool-schema hash, budgets, dataset hashes); typed `error_json` |
 | `model_calls` | Each model request | Content, raw tool calls, usage, latency, `reasoning_chars_discarded` (reasoning text never stored) |
-| `operations` | Each tool call, including failed ones | Written once; raw arguments as sent, validated args or null, consumed IDs, error |
+| `operations` | Each tool call, including failed ones and rejected `submit_answer` attempts | Written once; raw arguments as sent, validated args or null, consumed IDs, error |
 | `evidence` | Result of a successful operation | One per successful operation; immutable |
 | `claims`, `claim_evidence` | Model claims and their citations | Citations `agent_proposed`; must reference evidence from the same run (checked on the server) |
 
@@ -56,6 +56,8 @@ IDs are type-prefixed UUIDs (`src_…`, `view_…`). Timestamps are timezone-awa
 ## Deliberate boundaries
 
 - **No HTTP endpoint executes tools.** Tools run either directly (tests and scripts, unrecorded) or through the orchestrator (recorded). HTTP endpoints for asking questions arrive in M3.
+- **Runs are independent of earlier turns.** Conversations group runs, but a run's model context holds only its own question (M3 design item).
+- **Tool results shown to the model** omit fields a tool never set but keep explicit nulls (e.g. the missing-value group key).
 - **The agent's explanation text is not verified.** Only claims carry citations. See `docs/implementation/m2-agent-vertical-slice.md`.
 - `statistics.py` is pure, so correctness tests use hand-built frames with hand-computed values. Integration tests compare tool output against a stdlib-only reading of the raw fixture (`tests/reference.py`), not pandas against pandas.
 - Only root views are supported; any other view raises `UNSUPPORTED_VIEW` rather than being misapplied.

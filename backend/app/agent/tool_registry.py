@@ -108,8 +108,12 @@ def summarize_validation_error(exc: ValidationError) -> str:
 class ToolOutcome:
     args: dict[str, Any] | None  # validated arguments (JSON-safe), None if invalid
     input_ids: list[str]
-    result: dict[str, Any] | None  # JSON-safe full result on success
+    result: dict[str, Any] | None  # JSON-safe full result on success (stored as evidence)
     error: dict[str, Any] | None  # {code, message, details} on failure
+    # Compact result for the model: omits fields a tool never set (e.g. metrics that were
+    # not requested) but keeps explicit nulls, such as a missing-value group key or an
+    # undefined std, which carry meaning.
+    model_view: dict[str, Any] | None = None
 
     @property
     def ok(self) -> bool:
@@ -172,5 +176,9 @@ def execute(ctx: ToolContext, name: str, raw_arguments: str) -> ToolOutcome:
             input_ids=input_ids,
         )
     return ToolOutcome(
-        args=args_json, input_ids=input_ids, result=result.model_dump(mode="json"), error=None
+        args=args_json,
+        input_ids=input_ids,
+        result=result.model_dump(mode="json"),
+        error=None,
+        model_view=result.model_dump(mode="json", exclude_unset=True),
     )

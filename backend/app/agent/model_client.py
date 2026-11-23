@@ -46,8 +46,13 @@ class LLMUnavailableError(RuntimeError):
 
 class LLMClient(Protocol):
     def complete(
-        self, messages: Sequence[Message], tools: Sequence[dict[str, Any]]
-    ) -> ModelResponse: ...
+        self,
+        messages: Sequence[Message],
+        tools: Sequence[dict[str, Any]],
+        timeout_s: float | None = None,
+    ) -> ModelResponse:
+        """`timeout_s` caps this request (per attempt), e.g. to the run's remaining budget."""
+        ...
 
     def describe(self) -> dict[str, Any]:
         """Configuration snapshot for run metadata. Must not contain secrets."""
@@ -90,7 +95,10 @@ class OpenAICompatClient:
         }
 
     def complete(
-        self, messages: Sequence[Message], tools: Sequence[dict[str, Any]]
+        self,
+        messages: Sequence[Message],
+        tools: Sequence[dict[str, Any]],
+        timeout_s: float | None = None,
     ) -> ModelResponse:
         s = self._settings
         kwargs: dict[str, Any] = {
@@ -101,6 +109,8 @@ class OpenAICompatClient:
         }
         if s.llm_seed is not None:
             kwargs["seed"] = s.llm_seed
+        if timeout_s is not None:
+            kwargs["timeout"] = min(timeout_s, s.llm_timeout_s)
         if not s.llm_thinking:
             # Verified with Ollama 0.40 + qwen3.5 (docs/implementation/pre-m2-model-smoke-test.md)
             kwargs["extra_body"] = {"reasoning_effort": "none"}
@@ -124,7 +134,9 @@ class OpenAICompatClient:
         tool_calls = [
             ToolCallRequest(
                 id=tc.id or f"call_{uuid.uuid4().hex[:12]}",
-                name=tc.function.name,
+                # A nameless call becomes an UNKNOWN_TOOL error the model can repair,
+                # rather than a validation crash that loses the model call record.
+                name=tc.function.name or "",
                 arguments=_arguments_to_str(tc.function.arguments),
             )
             for tc in (message.tool_calls or [])
@@ -156,14 +168,19 @@ class FakeLLMClient:
     def __init__(self, script: Sequence[ScriptStep]) -> None:
         self._script = list(script)
         self.requests: list[list[Message]] = []
+        self.timeouts: list[float | None] = []
 
     def describe(self) -> dict[str, Any]:
         return {"provider": "fake", "model": "scripted", "steps": len(self._script)}
 
     def complete(
-        self, messages: Sequence[Message], tools: Sequence[dict[str, Any]]
+        self,
+        messages: Sequence[Message],
+        tools: Sequence[dict[str, Any]],
+        timeout_s: float | None = None,
     ) -> ModelResponse:
         self.requests.append(json.loads(json.dumps(list(messages))))
+        self.timeouts.append(timeout_s)
         if not self._script:
             raise AssertionError("FakeLLMClient script exhausted")
         step = self._script.pop(0)

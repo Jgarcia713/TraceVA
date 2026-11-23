@@ -1,6 +1,6 @@
 # TraceVA backend
 
-FastAPI + SQLite backend for TraceVA. The design brief is `../TRACEVA_BACKEND_CONTEXT.md`; decisions are in `../docs/decisions/`.
+FastAPI + SQLite backend for TraceVA. The design brief is `../docs/TRACEVA_BACKEND_CONTEXT.md`; decisions are in `../docs/decisions/`.
 
 ## Setup (Windows PowerShell; POSIX equivalents in comments)
 
@@ -78,7 +78,7 @@ Reports tool-call validity, reasoning leakage, and latency. See `../docs/impleme
 ```powershell
 ollama create traceva-qwen3.5-4b-8k -f ollama/traceva-qwen3.5-4b-8k.Modelfile   # once
 python scripts/ask.py "How do average weekly working hours differ between men and women?"
-python scripts/ask.py --show-evidence --conversation conv_... "Follow-up question"
+python scripts/ask.py --show-evidence "Is age related to income?"
 ```
 
 Each run records its operations, evidence, claims, and model calls in SQLite. Expect 1.5–7 minutes per question on a laptop CPU. Tests use a scripted fake model and need no Ollama.

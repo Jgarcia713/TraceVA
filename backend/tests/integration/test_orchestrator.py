@@ -286,7 +286,13 @@ def test_fabricated_citation_rejected_then_repaired(
     assert len(error["details"]["valid_evidence_ids"]) == 1
     with session_factory() as db:
         texts = db.scalars(select(Claim.text).where(Claim.run_id == result.run_id)).all()
+        # The rejected answer is recorded as a failed attempt (no evidence).
+        attempts = [(o.tool_name, o.status) for o in ops(db, result.run_id)]
+        run = db.get(AnalysisRun, result.run_id)
+        assert run is not None and run.usage_json is not None
+        assert run.usage_json["failed_operations"] == 1
     assert texts == ["Men work more hours on average than women."]  # rejected claim not stored
+    assert attempts == [("summarize", "succeeded"), ("submit_answer", "failed")]
 
 
 def test_cannot_cite_evidence_from_another_run(
@@ -348,10 +354,42 @@ def test_time_budget(
         return calls(tool_call("inspect_dataset", {"source_id": sample_ids["source_id"]}))
 
     settings = agent_settings.model_copy(update={"max_run_seconds": 50.0})
-    agent, _ = make_agent(session_factory, settings, [slow_step], clock=lambda: now[0])
+    agent, llm = make_agent(session_factory, settings, [slow_step], clock=lambda: now[0])
     result = agent.ask("Slow")
     assert result.status == RunStatus.FAILED
     assert result.error is not None and result.error["details"]["budget"] == "time"
+    assert llm.timeouts == [50.0]  # the call was capped at the remaining budget
+    with session_factory() as db:  # the late response was recorded but not acted on
+        assert ops(db, result.run_id) == []
+        assert (
+            len(db.scalars(select(ModelCall).where(ModelCall.run_id == result.run_id)).all()) == 1
+        )
+
+
+def test_model_sees_missing_key_groups_and_undefined_stats(
+    session_factory: sessionmaker[Session], agent_settings: Settings, sample_ids: dict[str, str]
+) -> None:
+    call = tool_call(
+        "summarize",
+        {
+            "view_id": sample_ids["view_id"],
+            "columns": ["hours_per_week"],
+            "group_by": ["native_country"],
+            "metrics": ["mean", "std"],
+        },
+    )
+    agent, llm = make_agent(session_factory, agent_settings, [calls(call), submit_citing_all()])
+    agent.ask("Hours by country")
+    groups = tool_payloads(llm.requests[1])[0]["result"]["groups"]
+
+    # The missing-value group keeps its explicit null key (not {}).
+    assert {"native_country": None} in [g["key"] for g in groups]
+    assert all("native_country" in g["key"] for g in groups)
+    summaries = [g["columns"]["hours_per_week"] for g in groups]
+    # Unrequested metrics are omitted; requested-but-undefined ones stay as explicit null.
+    assert all("median" not in s and "mean" in s for s in summaries)
+    singletons = [s for s in summaries if s["n"] == 1]
+    assert singletons and all("std" in s and s["std"] is None for s in singletons)
 
 
 def test_model_unavailable(

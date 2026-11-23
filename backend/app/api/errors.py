@@ -8,6 +8,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from fastapi import FastAPI, Request, Response
+from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -79,7 +80,7 @@ def install_error_handling(app: FastAPI) -> None:
             422,
             "VALIDATION_ERROR",
             "request validation failed",
-            {"errors": exc.errors()},
+            {"errors": jsonable_encoder(exc.errors())},
         )
 
     @app.exception_handler(Exception)

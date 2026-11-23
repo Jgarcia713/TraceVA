@@ -4,7 +4,10 @@ Persistence rules (brief §6, §8, §11):
 - Every tool call the model makes is recorded as an Operation, written once, with
   Evidence only on success. Failed calls produce no evidence.
 - Claims may cite only evidence produced by successful operations of the same run.
-- Database transactions are short and never span a model call.
+- Database transactions are short and never span a model call or a tool computation:
+  tools run in a read session that is closed before the write transaction opens.
+- Conversations group runs, but each run's model context contains only its own
+  question. Carrying earlier turns into the context is an M3 design decision.
 - Every exit path leaves the run `completed` or `failed` with a typed error, and the
   partial record is kept.
 """
@@ -101,14 +104,6 @@ def _error(code: str, message: str, details: dict[str, Any] | None = None) -> di
     return {"code": code, "message": message, "details": details or {}}
 
 
-def _drop_nones(value: Any) -> Any:
-    if isinstance(value, dict):
-        return {k: _drop_nones(v) for k, v in value.items() if v is not None}
-    if isinstance(value, list):
-        return [_drop_nones(v) for v in value]
-    return value
-
-
 def _assistant_message(response: ModelResponse) -> dict[str, Any]:
     return {
         "role": "assistant",
@@ -198,19 +193,7 @@ class AgentOrchestrator:
         for step in range(1, s.max_agent_steps + 1):
             if self._clock() > deadline:
                 return self._fail(
-                    run_id,
-                    conversation_id,
-                    usage,
-                    started,
-                    _error(
-                        RunFailure.BUDGET_EXHAUSTED,
-                        "run time budget exhausted",
-                        {
-                            "budget": "time",
-                            "max_run_seconds": s.max_run_seconds,
-                            "last_error": last_error,
-                        },
-                    ),
+                    run_id, conversation_id, usage, started, self._time_budget_error(last_error)
                 )
             estimate = self._estimate_prompt(messages, tools, known)
             if self._over_context(estimate):
@@ -229,10 +212,15 @@ class AgentOrchestrator:
                         },
                     ),
                 )
+            remaining = max(deadline - self._clock(), 1.0)
             try:
-                response = self._llm.complete(messages, tools)
+                response = self._llm.complete(messages, tools, timeout_s=remaining)
             except LLMUnavailableError as exc:
                 self._record_model_call(run_id, step, None, _error("MODEL_UNAVAILABLE", str(exc)))
+                if self._clock() >= deadline:  # our shortened timeout expired
+                    return self._fail(
+                        run_id, conversation_id, usage, started, self._time_budget_error(last_error)
+                    )
                 return self._fail(
                     run_id,
                     conversation_id,
@@ -242,6 +230,10 @@ class AgentOrchestrator:
                 )
             usage.add(response)
             model_call_id = self._record_model_call(run_id, step, response, None)
+            if self._clock() > deadline:  # recorded, but not acted on
+                return self._fail(
+                    run_id, conversation_id, usage, started, self._time_budget_error(last_error)
+                )
             if response.prompt_tokens is not None and self._over_context(response.prompt_tokens):
                 # The server may already have dropped context; don't trust this response.
                 return self._fail(
@@ -306,7 +298,12 @@ class AgentOrchestrator:
                     result = self._submit_answer(run_id, conversation_id, call, usage, started)
                     if isinstance(result, RunResult):
                         return result
-                    payload = {"error": result}
+                    # A rejected answer is a failed attempt and is recorded like one.
+                    payload = {
+                        "error": self._record_rejected_call(
+                            run_id, model_call_id, call, usage, result
+                        )
+                    }
                 else:
                     payload = self._execute_tool(run_id, model_call_id, call, usage)
                 last_error = payload.get("error", last_error)
@@ -322,6 +319,17 @@ class AgentOrchestrator:
                 "step budget exhausted without an answer",
                 {"budget": "steps", "max_agent_steps": s.max_agent_steps, "last_error": last_error},
             ),
+        )
+
+    def _time_budget_error(self, last_error: dict[str, Any] | None) -> dict[str, Any]:
+        return _error(
+            RunFailure.BUDGET_EXHAUSTED,
+            "run time budget exhausted",
+            {
+                "budget": "time",
+                "max_run_seconds": self._settings.max_run_seconds,
+                "last_error": last_error,
+            },
         )
 
     # ------------------------------------------------------------------ context
@@ -367,22 +375,26 @@ class AgentOrchestrator:
         self, run_id: str, model_call_id: str, call: ToolCallRequest, usage: _Usage
     ) -> dict[str, Any]:
         s = self._settings
-        with self._sessions.begin() as session:
-            ctx = ToolContext(session, s.data_dir, s.max_tool_result_rows)
+        # Compute in a read-only session (closed afterwards), then write in a short
+        # transaction, so a slow first dataset load never holds the database.
+        with self._sessions() as read_session:
+            ctx = ToolContext(read_session, s.data_dir, s.max_tool_result_rows)
             started_at = utcnow()
             outcome = execute(ctx, call.name, call.arguments)
+            completed_at = utcnow()
+        with self._sessions.begin() as session:
             operation = self._operation(
-                session, run_id, model_call_id, call, outcome, started_at, utcnow()
+                session, run_id, model_call_id, call, outcome, started_at, completed_at
             )
             usage.operations += 1
             if not outcome.ok:
                 usage.failed_operations += 1
                 return {"error": outcome.error}
-            assert outcome.result is not None
+            assert outcome.result is not None and outcome.model_view is not None
             evidence = Evidence(operation_id=operation.id, result_json=outcome.result)
             session.add(evidence)
             session.flush()
-            return self._model_view(evidence.id, outcome.result)
+            return self._model_view(evidence.id, outcome.model_view)
 
     def _record_rejected_call(
         self,
@@ -428,9 +440,8 @@ class AgentOrchestrator:
         session.flush()
         return operation
 
-    def _model_view(self, evidence_id: str, result: dict[str, Any]) -> dict[str, Any]:
+    def _model_view(self, evidence_id: str, compact: dict[str, Any]) -> dict[str, Any]:
         """What the model sees: compact result + evidence ID. Evidence keeps the full result."""
-        compact = _drop_nones(result)
         if len(json.dumps(compact)) > self._settings.max_tool_result_chars:
             return {
                 "evidence_id": evidence_id,

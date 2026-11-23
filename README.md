@@ -6,4 +6,4 @@ Explainable agentic visual analytics through interactive analytical provenance.
 - `datasets/`: local raw datasets, not committed ([instructions](datasets/README.md))
 - `docs/architecture.md`: current architecture (as built)
 - `docs/decisions/`: architecture decision records
-- `TRACEVA_BACKEND_CONTEXT.md`: design brief
+- `docs/TRACEVA_BACKEND_CONTEXT.md`: design brief
